@@ -1,6 +1,11 @@
 import { makeid } from "./utils";
 import isEqual from 'lodash.isequal';
 
+function stackTrace() {
+    var err = new Error();
+    return err.stack;
+}
+
 export function variable (val) {
 	//{id: makeid(5), value: current_val, set, subscribe, get, get_last}
 	let subscribers = new Set();

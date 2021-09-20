@@ -1,5 +1,4 @@
-//How tf does this piece of sh*t work???
-import { Conditional, Element, For } from '..';
+import { Conditional, Element, For } from './index';
 
 export class Component {
 	//$ = API method/variable
@@ -12,6 +11,7 @@ export class Component {
 	//Component management
 	$parent; //Parent component
 	$children = new Set(); //Child components
+	$props;
 
 	constructor (options = {}) {
 		//Todo this.mount if is root element
@@ -19,6 +19,7 @@ export class Component {
 			options.mount.innerHTML = "";
 			this.mount(options.mount);
 		}
+		if (options.props) this.$props = options.props;
 	}
 
 	set_parent(parent) {

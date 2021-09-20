@@ -1,5 +1,5 @@
 import isEqual from 'lodash.isequal';
-import { get_current_component, set_current_component } from "..";
+import { get_current_component, set_current_component } from "./index";
 
 export class Conditional {
 
