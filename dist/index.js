@@ -41,6 +41,9 @@
 	 
 		async mount (root, before = false) {
 			this._parentElement = root;
+			this.$parent = get_current_component();
+
+			if (get_current_component()) get_current_component().$children.add(this);
 			set_current_component(this);
 			await this.instance();
 			//Adds component
@@ -48,6 +51,7 @@
 			if (this.beforeMounted) await this.beforeMounted();
 
 			for (let child of this._childrenElements) {
+				set_current_component(this);
 				if (before) await child.mount(root, before);
 				else await child.mount(root);
 			}
@@ -67,8 +71,10 @@
 			if (attrs == null) attrs = {};
 
 			if (typeof type == "string") {
+				//Creates element
 				let element = new Element(type, [], attrs);
 
+				//Adds children to element
 				for (const [key, value] of Object.entries(children)) { 
 					if (typeof value == "object" && value.subscribe == undefined) {
 						element.add_child(value);
@@ -80,13 +86,21 @@
 
 				return element;
 			} else {
-				return new type(children, attrs);
+
+				//Initializes component
+				return new type({
+					props: attrs
+				});
 			}
 		}
 
 		//Todo reimplement with new code formatting
 		condition(vars, cb) {
 			return new Conditional(vars, cb);
+		}
+
+		for (array, cb) {
+			return new For(array, cb);
 		}
 	}
 
@@ -112,7 +126,7 @@
 		get_current_component().beforeUnmount = fn;
 	}
 
-	function onUnmount (fn) {
+	function onDestroy (fn) {
 		get_current_component().unmounted = fn;
 	}
 
@@ -139,7 +153,7 @@
 
 		_eventListeners = [];
 
-		constructor(element, children, attrs = {}, parent = undefined) {
+		constructor(element, children, attrs = {}) {
 			//create element
 			if (element == "#text") {
 				if (children[0].subscribe !== undefined) {
@@ -2073,6 +2087,67 @@
 	module.exports = isEqual;
 	});
 
+	//TODO work on reactivity
+	class For {
+
+		//$ = API method/variable
+		//_ = Internal method/variable
+		$parent;
+
+		//Element management
+		_parentElement; //Parent element to this
+
+		//Conditional exclusive ;)
+		_anchor; //Anchor point for loop
+		_array; //Array value
+		_cb;
+
+		_children = [];
+
+		constructor (array, cb) {
+			//Create anchor point
+			this._anchor = document.createTextNode('');
+			this._cb = cb;
+			this._array = array;
+		}
+
+		set_parent(parent) {
+			this._parentElement = parent;
+		}
+
+		remove_child () {}
+
+		async update () {
+			
+		}
+
+		async mount (root, before = false) {
+			//Mount anchor point
+			root.appendChild(this._anchor);
+			this.$parent = get_current_component();
+
+			//Initialize reactive vars.
+			//console.log(this._array);
+			//TODO do this but not stupid
+			for (let i in this._array.value) {
+				let output = await this._cb(this._array.value[i]);
+				if (output !== undefined || output !== null) this._children.push(output);
+			}
+
+			for (let i in this._children) {
+				set_current_component(this.$parent);
+				await this._children[i].mount(this._anchor, true);
+			}
+		}
+
+		async destroy () {
+			this._anchor.remove();
+			for (let element of this._children) element.destroy();
+			if (this._parentElement) this._parentElement.remove_child(this);
+		}
+
+	}
+
 	class Conditional {
 
 		//$ = API method/variable
@@ -2105,10 +2180,14 @@
 			//Run conditional callback
 			let output = await this._conditional(this._vars);
 			if (output !== null && output !== undefined && this._activeElement == undefined) {
+				if (this.$parent.$children) this.$parent.$children.add(output);
+				set_current_component(this.$parent);
 				await output.mount(this._anchor, true);
 				await output.set_parent(this);
 				this._activeElement = output;
+				output = undefined;
 			} else if (output == null && output == undefined && this._activeElement !== undefined) {
+				if (this.$parent.$children) this.$parent.$children.delete(this._activeElement);
 				this._activeElement.destroy();
 				this._activeElement = undefined;
 			}
@@ -2123,6 +2202,8 @@
 		async mount (root, before = false) {
 			//Mount anchor point
 			root.appendChild(this._anchor);
+
+			this.$parent = get_current_component();
 
 			//Initialize reactive vars.
 			for (let i in this._reactiveVars) {
@@ -2162,38 +2243,50 @@
 	}
 
 	function variable (val) {
+		//{id: makeid(5), value: current_val, set, subscribe, get, get_last}
 		let subscribers = new Set();
-		let current_val = val;
-		let old_val = undefined;
 
-		function set (new_val) {
-			if (!lodash_isequal(new_val, current_val)) {
-				for (const subscriber of subscribers) {
-					subscriber(new_val, current_val);
+		let current_value = val;
+		let old_value = undefined;
+		return class {
+			static id = makeid(5);
+
+			//Used for user manipulation
+			static value = val;
+
+			static set (new_val) {
+				if (!lodash_isequal(new_val, current_value)) {
+					for (const subscriber of subscribers) {
+						subscriber(new_val, current_value);
+					}
+			
+					this.value = new_val;
+
+					old_value = current_value;
+					current_value = new_val;
 				}
-		
-				old_val = current_val;
-				current_val = new_val;
 			}
-		}
-		
-		function subscribe (run) {
-			subscribers.add(run);
 
-			return () => {
-				subscribers.delete(run);
+			static update () {
+				this.set(this.value);
 			}
-		}
+			
+			static get () {
+				return current_value;
+			}
 
-		function get () {
-			return current_val;
-		}
+			static get_last() {
+				return old_value;
+			}
 
-		function get_last () {
-			return old_val;
-		}
-
-		return {id: makeid(5), set, subscribe, get, get_last};
+			static subscribe (run) {
+				subscribers.add(run);
+		
+				return () => {
+					subscribers.delete(run);
+				}
+			}
+		};
 	}
 
 	function anchor () {
@@ -2214,14 +2307,15 @@
 	exports.Component = Component;
 	exports.Conditional = Conditional;
 	exports.Element = Element;
+	exports.For = For;
 	exports.anchor = anchor;
 	exports.beforeMount = beforeMount;
 	exports.beforeUnmount = beforeUnmount;
 	exports.get_current_component = get_current_component;
 	exports.makeid = makeid;
+	exports.onDestroy = onDestroy;
 	exports.onMount = onMount;
 	exports.onRender = onRender;
-	exports.onUnmount = onUnmount;
 	exports.set_current_component = set_current_component;
 	exports.variable = variable;
 

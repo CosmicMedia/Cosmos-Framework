@@ -1,5 +1,5 @@
 import isEqual from 'lodash.isequal';
-import { get_current_component } from "..";
+import { get_current_component, set_current_component } from "..";
 
 export class Conditional {
 
@@ -33,10 +33,14 @@ export class Conditional {
 		//Run conditional callback
 		let output = await this._conditional(this._vars);
 		if (output !== null && output !== undefined && this._activeElement == undefined) {
+			if (this.$parent.$children) this.$parent.$children.add(output);
+			set_current_component(this.$parent);
 			await output.mount(this._anchor, true);
 			await output.set_parent(this);
 			this._activeElement = output;
+			output = undefined;
 		} else if (output == null && output == undefined && this._activeElement !== undefined) {
+			if (this.$parent.$children) this.$parent.$children.delete(this._activeElement);
 			this._activeElement.destroy();
 			this._activeElement = undefined;
 		}
@@ -51,6 +55,8 @@ export class Conditional {
 	async mount (root, before = false) {
 		//Mount anchor point
 		root.appendChild(this._anchor);
+
+		this.$parent = get_current_component();
 
 		//Initialize reactive vars.
 		for (let i in this._reactiveVars) {

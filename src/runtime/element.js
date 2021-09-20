@@ -18,7 +18,7 @@ export class Element {
 
 	_eventListeners = [];
 
-	constructor(element, children, attrs = {}, parent = undefined) {
+	constructor(element, children, attrs = {}) {
 		//create element
 		if (element == "#text") {
 			if (children[0].subscribe !== undefined) {

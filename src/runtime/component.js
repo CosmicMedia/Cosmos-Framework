@@ -1,5 +1,5 @@
 //How tf does this piece of sh*t work???
-import { Conditional, Element } from '..';
+import { Conditional, Element, For } from '..';
 
 export class Component {
 	//$ = API method/variable
@@ -36,6 +36,9 @@ export class Component {
  
 	async mount (root, before = false) {
 		this._parentElement = root;
+		this.$parent = get_current_component();
+
+		if (get_current_component()) get_current_component().$children.add(this);
 		set_current_component(this);
 		await this.instance();
 		//Adds component
@@ -43,6 +46,7 @@ export class Component {
 		if (this.beforeMounted) await this.beforeMounted();
 
 		for (let child of this._childrenElements) {
+			set_current_component(this);
 			if (before) await child.mount(root, before)
 			else await child.mount(root);
 		}
@@ -62,8 +66,10 @@ export class Component {
 		if (attrs == null) attrs = {};
 
 		if (typeof type == "string") {
+			//Creates element
 			let element = new Element(type, [], attrs);
 
+			//Adds children to element
 			for (const [key, value] of Object.entries(children)) { 
 				if (typeof value == "object" && value.subscribe == undefined) {
 					element.add_child(value);
@@ -75,13 +81,21 @@ export class Component {
 
 			return element;
 		} else {
-			return new type(children, attrs);
+
+			//Initializes component
+			return new type({
+				props: attrs
+			});
 		}
 	}
 
 	//Todo reimplement with new code formatting
 	condition(vars, cb) {
 		return new Conditional(vars, cb);
+	}
+
+	for (array, cb) {
+		return new For(array, cb);
 	}
 }
 
@@ -107,7 +121,7 @@ export function beforeUnmount (fn) {
 	get_current_component().beforeUnmount = fn;
 }
 
-export function onUnmount (fn) {
+export function onDestroy (fn) {
 	get_current_component().unmounted = fn;
 }
 

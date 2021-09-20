@@ -1,7 +1,7 @@
 {
-  "name": "cosmos",
+  "name": "cosmos-framework",
   "version": "1.0.0",
-  "description": "Frontend utility framework",
+  "description": "Frontend framework for creating reactive UIs using direct DOM manipulation.",
   "main": "dist/index.js",
   "scripts": {
     "build": "rollup -c",
