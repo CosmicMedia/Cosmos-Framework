@@ -8,8 +8,8 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "exports": {
-		".": "./dist/runtime/index.js",
-		"./compiler": "./dist/compiler/index.js"
+    ".": "./dist/runtime/index.js",
+    "./compiler": "./dist/compiler/index.js"
   },
   "type": "commonjs",
   "author": "CosmicMedia LLC",

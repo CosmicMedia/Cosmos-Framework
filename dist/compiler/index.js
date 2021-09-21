@@ -9,6 +9,16 @@ var fs__default = /*#__PURE__*/_interopDefaultLegacy(fs);
 var path__default = /*#__PURE__*/_interopDefaultLegacy(path);
 
 // Astring is a tiny and fast JavaScript code generator from an ESTree-compliant AST.
+//
+// Astring was written by David Bonnet and released under an MIT license.
+//
+// The Git repository for Astring is available at:
+// https://github.com/davidbonnet/astring.git
+//
+// Please use the GitHub bug tracker to report issues:
+// https://github.com/davidbonnet/astring/issues
+
+const { stringify } = JSON;
 
 /* c8 ignore if */
 if (!String.prototype.repeat) {
@@ -24,6 +34,1124 @@ if (!String.prototype.endsWith) {
   throw new Error(
     'String.prototype.endsWith is undefined, see https://github.com/davidbonnet/astring#installation',
   )
+}
+
+const OPERATOR_PRECEDENCE = {
+  '||': 3,
+  '&&': 4,
+  '|': 5,
+  '^': 6,
+  '&': 7,
+  '==': 8,
+  '!=': 8,
+  '===': 8,
+  '!==': 8,
+  '<': 9,
+  '>': 9,
+  '<=': 9,
+  '>=': 9,
+  in: 9,
+  instanceof: 9,
+  '<<': 10,
+  '>>': 10,
+  '>>>': 10,
+  '+': 11,
+  '-': 11,
+  '*': 12,
+  '%': 12,
+  '/': 12,
+  '**': 13,
+};
+
+// Enables parenthesis regardless of precedence
+const NEEDS_PARENTHESES = 17;
+
+const EXPRESSIONS_PRECEDENCE = {
+  // Definitions
+  ArrayExpression: 20,
+  TaggedTemplateExpression: 20,
+  ThisExpression: 20,
+  Identifier: 20,
+  Literal: 18,
+  TemplateLiteral: 20,
+  Super: 20,
+  SequenceExpression: 20,
+  // Operations
+  MemberExpression: 19,
+  ChainExpression: 19,
+  CallExpression: 19,
+  NewExpression: 19,
+  // Other definitions
+  ArrowFunctionExpression: NEEDS_PARENTHESES,
+  ClassExpression: NEEDS_PARENTHESES,
+  FunctionExpression: NEEDS_PARENTHESES,
+  ObjectExpression: NEEDS_PARENTHESES,
+  // Other operations
+  UpdateExpression: 16,
+  UnaryExpression: 15,
+  AwaitExpression: 15,
+  BinaryExpression: 14,
+  LogicalExpression: 13,
+  ConditionalExpression: 4,
+  AssignmentExpression: 3,
+  YieldExpression: 2,
+  RestElement: 1,
+};
+
+function formatSequence(state, nodes) {
+  /*
+  Writes into `state` a sequence of `nodes`.
+  */
+  const { generator } = state;
+  state.write('(');
+  if (nodes != null && nodes.length > 0) {
+    generator[nodes[0].type](nodes[0], state);
+    const { length } = nodes;
+    for (let i = 1; i < length; i++) {
+      const param = nodes[i];
+      state.write(', ');
+      generator[param.type](param, state);
+    }
+  }
+  state.write(')');
+}
+
+function expressionNeedsParenthesis(state, node, parentNode, isRightHand) {
+  const nodePrecedence = state.expressionsPrecedence[node.type];
+  if (nodePrecedence === NEEDS_PARENTHESES) {
+    return true
+  }
+  const parentNodePrecedence = state.expressionsPrecedence[parentNode.type];
+  if (nodePrecedence !== parentNodePrecedence) {
+    // Different node types
+    return (
+      (!isRightHand &&
+        nodePrecedence === 15 &&
+        parentNodePrecedence === 14 &&
+        parentNode.operator === '**') ||
+      nodePrecedence < parentNodePrecedence
+    )
+  }
+  if (nodePrecedence !== 13 && nodePrecedence !== 14) {
+    // Not a `LogicalExpression` or `BinaryExpression`
+    return false
+  }
+  if (node.operator === '**' && parentNode.operator === '**') {
+    // Exponentiation operator has right-to-left associativity
+    return !isRightHand
+  }
+  if (isRightHand) {
+    // Parenthesis are used if both operators have the same precedence
+    return (
+      OPERATOR_PRECEDENCE[node.operator] <=
+      OPERATOR_PRECEDENCE[parentNode.operator]
+    )
+  }
+  return (
+    OPERATOR_PRECEDENCE[node.operator] <
+    OPERATOR_PRECEDENCE[parentNode.operator]
+  )
+}
+
+function formatExpression(state, node, parentNode, isRightHand) {
+  /*
+  Writes into `state` the provided `node`, adding parenthesis around if the provided `parentNode` needs it. If `node` is a right-hand argument, the provided `isRightHand` parameter should be `true`.
+  */
+  const { generator } = state;
+  if (expressionNeedsParenthesis(state, node, parentNode, isRightHand)) {
+    state.write('(');
+    generator[node.type](node, state);
+    state.write(')');
+  } else {
+    generator[node.type](node, state);
+  }
+}
+
+function reindent(state, text, indent, lineEnd) {
+  /*
+  Writes into `state` the `text` string reindented with the provided `indent`.
+  */
+  const lines = text.split('\n');
+  const end = lines.length - 1;
+  state.write(lines[0].trim());
+  if (end > 0) {
+    state.write(lineEnd);
+    for (let i = 1; i < end; i++) {
+      state.write(indent + lines[i].trim() + lineEnd);
+    }
+    state.write(indent + lines[end].trim());
+  }
+}
+
+function formatComments(state, comments, indent, lineEnd) {
+  /*
+  Writes into `state` the provided list of `comments`, with the given `indent` and `lineEnd` strings.
+  Line comments will end with `"\n"` regardless of the value of `lineEnd`.
+  Expects to start on a new unindented line.
+  */
+  const { length } = comments;
+  for (let i = 0; i < length; i++) {
+    const comment = comments[i];
+    state.write(indent);
+    if (comment.type[0] === 'L') {
+      // Line comment
+      state.write('// ' + comment.value.trim() + '\n', comment);
+    } else {
+      // Block comment
+      state.write('/*');
+      reindent(state, comment.value, indent, lineEnd);
+      state.write('*/' + lineEnd);
+    }
+  }
+}
+
+function hasCallExpression(node) {
+  /*
+  Returns `true` if the provided `node` contains a call expression and `false` otherwise.
+  */
+  let currentNode = node;
+  while (currentNode != null) {
+    const { type } = currentNode;
+    if (type[0] === 'C' && type[1] === 'a') {
+      // Is CallExpression
+      return true
+    } else if (type[0] === 'M' && type[1] === 'e' && type[2] === 'm') {
+      // Is MemberExpression
+      currentNode = currentNode.object;
+    } else {
+      return false
+    }
+  }
+}
+
+function formatVariableDeclaration(state, node) {
+  /*
+  Writes into `state` a variable declaration.
+  */
+  const { generator } = state;
+  const { declarations } = node;
+  state.write(node.kind + ' ');
+  const { length } = declarations;
+  if (length > 0) {
+    generator.VariableDeclarator(declarations[0], state);
+    for (let i = 1; i < length; i++) {
+      state.write(', ');
+      generator.VariableDeclarator(declarations[i], state);
+    }
+  }
+}
+
+let ForInStatement,
+  FunctionDeclaration,
+  RestElement,
+  BinaryExpression,
+  ArrayExpression,
+  BlockStatement;
+
+const GENERATOR = {
+  /*
+  Default generator.
+  */
+  Program(node, state) {
+    const indent = state.indent.repeat(state.indentLevel);
+    const { lineEnd, writeComments } = state;
+    if (writeComments && node.comments != null) {
+      formatComments(state, node.comments, indent, lineEnd);
+    }
+    const statements = node.body;
+    const { length } = statements;
+    for (let i = 0; i < length; i++) {
+      const statement = statements[i];
+      if (writeComments && statement.comments != null) {
+        formatComments(state, statement.comments, indent, lineEnd);
+      }
+      state.write(indent);
+      this[statement.type](statement, state);
+      state.write(lineEnd);
+    }
+    if (writeComments && node.trailingComments != null) {
+      formatComments(state, node.trailingComments, indent, lineEnd);
+    }
+  },
+  BlockStatement: (BlockStatement = function (node, state) {
+    const indent = state.indent.repeat(state.indentLevel++);
+    const { lineEnd, writeComments } = state;
+    const statementIndent = indent + state.indent;
+    state.write('{');
+    const statements = node.body;
+    if (statements != null && statements.length > 0) {
+      state.write(lineEnd);
+      if (writeComments && node.comments != null) {
+        formatComments(state, node.comments, statementIndent, lineEnd);
+      }
+      const { length } = statements;
+      for (let i = 0; i < length; i++) {
+        const statement = statements[i];
+        if (writeComments && statement.comments != null) {
+          formatComments(state, statement.comments, statementIndent, lineEnd);
+        }
+        state.write(statementIndent);
+        this[statement.type](statement, state);
+        state.write(lineEnd);
+      }
+      state.write(indent);
+    } else {
+      if (writeComments && node.comments != null) {
+        state.write(lineEnd);
+        formatComments(state, node.comments, statementIndent, lineEnd);
+        state.write(indent);
+      }
+    }
+    if (writeComments && node.trailingComments != null) {
+      formatComments(state, node.trailingComments, statementIndent, lineEnd);
+    }
+    state.write('}');
+    state.indentLevel--;
+  }),
+  ClassBody: BlockStatement,
+  EmptyStatement(node, state) {
+    state.write(';');
+  },
+  ExpressionStatement(node, state) {
+    const precedence = state.expressionsPrecedence[node.expression.type];
+    if (
+      precedence === NEEDS_PARENTHESES ||
+      (precedence === 3 && node.expression.left.type[0] === 'O')
+    ) {
+      // Should always have parentheses or is an AssignmentExpression to an ObjectPattern
+      state.write('(');
+      this[node.expression.type](node.expression, state);
+      state.write(')');
+    } else {
+      this[node.expression.type](node.expression, state);
+    }
+    state.write(';');
+  },
+  IfStatement(node, state) {
+    state.write('if (');
+    this[node.test.type](node.test, state);
+    state.write(') ');
+    this[node.consequent.type](node.consequent, state);
+    if (node.alternate != null) {
+      state.write(' else ');
+      this[node.alternate.type](node.alternate, state);
+    }
+  },
+  LabeledStatement(node, state) {
+    this[node.label.type](node.label, state);
+    state.write(': ');
+    this[node.body.type](node.body, state);
+  },
+  BreakStatement(node, state) {
+    state.write('break');
+    if (node.label != null) {
+      state.write(' ');
+      this[node.label.type](node.label, state);
+    }
+    state.write(';');
+  },
+  ContinueStatement(node, state) {
+    state.write('continue');
+    if (node.label != null) {
+      state.write(' ');
+      this[node.label.type](node.label, state);
+    }
+    state.write(';');
+  },
+  WithStatement(node, state) {
+    state.write('with (');
+    this[node.object.type](node.object, state);
+    state.write(') ');
+    this[node.body.type](node.body, state);
+  },
+  SwitchStatement(node, state) {
+    const indent = state.indent.repeat(state.indentLevel++);
+    const { lineEnd, writeComments } = state;
+    state.indentLevel++;
+    const caseIndent = indent + state.indent;
+    const statementIndent = caseIndent + state.indent;
+    state.write('switch (');
+    this[node.discriminant.type](node.discriminant, state);
+    state.write(') {' + lineEnd);
+    const { cases: occurences } = node;
+    const { length: occurencesCount } = occurences;
+    for (let i = 0; i < occurencesCount; i++) {
+      const occurence = occurences[i];
+      if (writeComments && occurence.comments != null) {
+        formatComments(state, occurence.comments, caseIndent, lineEnd);
+      }
+      if (occurence.test) {
+        state.write(caseIndent + 'case ');
+        this[occurence.test.type](occurence.test, state);
+        state.write(':' + lineEnd);
+      } else {
+        state.write(caseIndent + 'default:' + lineEnd);
+      }
+      const { consequent } = occurence;
+      const { length: consequentCount } = consequent;
+      for (let i = 0; i < consequentCount; i++) {
+        const statement = consequent[i];
+        if (writeComments && statement.comments != null) {
+          formatComments(state, statement.comments, statementIndent, lineEnd);
+        }
+        state.write(statementIndent);
+        this[statement.type](statement, state);
+        state.write(lineEnd);
+      }
+    }
+    state.indentLevel -= 2;
+    state.write(indent + '}');
+  },
+  ReturnStatement(node, state) {
+    state.write('return');
+    if (node.argument) {
+      state.write(' ');
+      this[node.argument.type](node.argument, state);
+    }
+    state.write(';');
+  },
+  ThrowStatement(node, state) {
+    state.write('throw ');
+    this[node.argument.type](node.argument, state);
+    state.write(';');
+  },
+  TryStatement(node, state) {
+    state.write('try ');
+    this[node.block.type](node.block, state);
+    if (node.handler) {
+      const { handler } = node;
+      if (handler.param == null) {
+        state.write(' catch ');
+      } else {
+        state.write(' catch (');
+        this[handler.param.type](handler.param, state);
+        state.write(') ');
+      }
+      this[handler.body.type](handler.body, state);
+    }
+    if (node.finalizer) {
+      state.write(' finally ');
+      this[node.finalizer.type](node.finalizer, state);
+    }
+  },
+  WhileStatement(node, state) {
+    state.write('while (');
+    this[node.test.type](node.test, state);
+    state.write(') ');
+    this[node.body.type](node.body, state);
+  },
+  DoWhileStatement(node, state) {
+    state.write('do ');
+    this[node.body.type](node.body, state);
+    state.write(' while (');
+    this[node.test.type](node.test, state);
+    state.write(');');
+  },
+  ForStatement(node, state) {
+    state.write('for (');
+    if (node.init != null) {
+      const { init } = node;
+      if (init.type[0] === 'V') {
+        formatVariableDeclaration(state, init);
+      } else {
+        this[init.type](init, state);
+      }
+    }
+    state.write('; ');
+    if (node.test) {
+      this[node.test.type](node.test, state);
+    }
+    state.write('; ');
+    if (node.update) {
+      this[node.update.type](node.update, state);
+    }
+    state.write(') ');
+    this[node.body.type](node.body, state);
+  },
+  ForInStatement: (ForInStatement = function (node, state) {
+    state.write(`for ${node.await ? 'await ' : ''}(`);
+    const { left } = node;
+    if (left.type[0] === 'V') {
+      formatVariableDeclaration(state, left);
+    } else {
+      this[left.type](left, state);
+    }
+    // Identifying whether node.type is `ForInStatement` or `ForOfStatement`
+    state.write(node.type[3] === 'I' ? ' in ' : ' of ');
+    this[node.right.type](node.right, state);
+    state.write(') ');
+    this[node.body.type](node.body, state);
+  }),
+  ForOfStatement: ForInStatement,
+  DebuggerStatement(node, state) {
+    state.write('debugger;', node);
+  },
+  FunctionDeclaration: (FunctionDeclaration = function (node, state) {
+    state.write(
+      (node.async ? 'async ' : '') +
+        (node.generator ? 'function* ' : 'function ') +
+        (node.id ? node.id.name : ''),
+      node,
+    );
+    formatSequence(state, node.params);
+    state.write(' ');
+    this[node.body.type](node.body, state);
+  }),
+  FunctionExpression: FunctionDeclaration,
+  VariableDeclaration(node, state) {
+    formatVariableDeclaration(state, node);
+    state.write(';');
+  },
+  VariableDeclarator(node, state) {
+    this[node.id.type](node.id, state);
+    if (node.init != null) {
+      state.write(' = ');
+      this[node.init.type](node.init, state);
+    }
+  },
+  ClassDeclaration(node, state) {
+    state.write('class ' + (node.id ? `${node.id.name} ` : ''), node);
+    if (node.superClass) {
+      state.write('extends ');
+      const { superClass } = node;
+      const { type } = superClass;
+      const precedence = state.expressionsPrecedence[type];
+      if (
+        (type[0] !== 'C' || type[1] !== 'l' || type[5] !== 'E') &&
+        (precedence === NEEDS_PARENTHESES ||
+          precedence < state.expressionsPrecedence.ClassExpression)
+      ) {
+        // Not a ClassExpression that needs parentheses
+        state.write('(');
+        this[node.superClass.type](superClass, state);
+        state.write(')');
+      } else {
+        this[superClass.type](superClass, state);
+      }
+      state.write(' ');
+    }
+    this.ClassBody(node.body, state);
+  },
+  ImportDeclaration(node, state) {
+    state.write('import ');
+    const { specifiers } = node;
+    const { length } = specifiers;
+    // TODO: Once babili is fixed, put this after condition
+    // https://github.com/babel/babili/issues/430
+    let i = 0;
+    if (length > 0) {
+      for (; i < length; ) {
+        if (i > 0) {
+          state.write(', ');
+        }
+        const specifier = specifiers[i];
+        const type = specifier.type[6];
+        if (type === 'D') {
+          // ImportDefaultSpecifier
+          state.write(specifier.local.name, specifier);
+          i++;
+        } else if (type === 'N') {
+          // ImportNamespaceSpecifier
+          state.write('* as ' + specifier.local.name, specifier);
+          i++;
+        } else {
+          // ImportSpecifier
+          break
+        }
+      }
+      if (i < length) {
+        state.write('{');
+        for (;;) {
+          const specifier = specifiers[i];
+          const { name } = specifier.imported;
+          state.write(name, specifier);
+          if (name !== specifier.local.name) {
+            state.write(' as ' + specifier.local.name);
+          }
+          if (++i < length) {
+            state.write(', ');
+          } else {
+            break
+          }
+        }
+        state.write('}');
+      }
+      state.write(' from ');
+    }
+    this.Literal(node.source, state);
+    state.write(';');
+  },
+  ImportExpression(node, state) {
+    state.write('import(');
+    this[node.source.type](node.source, state);
+    state.write(')');
+  },
+  ExportDefaultDeclaration(node, state) {
+    state.write('export default ');
+    this[node.declaration.type](node.declaration, state);
+    if (
+      state.expressionsPrecedence[node.declaration.type] != null &&
+      node.declaration.type[0] !== 'F'
+    ) {
+      // All expression nodes except `FunctionExpression`
+      state.write(';');
+    }
+  },
+  ExportNamedDeclaration(node, state) {
+    state.write('export ');
+    if (node.declaration) {
+      this[node.declaration.type](node.declaration, state);
+    } else {
+      state.write('{');
+      const { specifiers } = node,
+        { length } = specifiers;
+      if (length > 0) {
+        for (let i = 0; ; ) {
+          const specifier = specifiers[i];
+          const { name } = specifier.local;
+          state.write(name, specifier);
+          if (name !== specifier.exported.name) {
+            state.write(' as ' + specifier.exported.name);
+          }
+          if (++i < length) {
+            state.write(', ');
+          } else {
+            break
+          }
+        }
+      }
+      state.write('}');
+      if (node.source) {
+        state.write(' from ');
+        this.Literal(node.source, state);
+      }
+      state.write(';');
+    }
+  },
+  ExportAllDeclaration(node, state) {
+    if (node.exported != null) {
+      state.write('export * as ' + node.exported.name + ' from ');
+    } else {
+      state.write('export * from ');
+    }
+    this.Literal(node.source, state);
+    state.write(';');
+  },
+  MethodDefinition(node, state) {
+    if (node.static) {
+      state.write('static ');
+    }
+    const kind = node.kind[0];
+    if (kind === 'g' || kind === 's') {
+      // Getter or setter
+      state.write(node.kind + ' ');
+    }
+    if (node.value.async) {
+      state.write('async ');
+    }
+    if (node.value.generator) {
+      state.write('*');
+    }
+    if (node.computed) {
+      state.write('[');
+      this[node.key.type](node.key, state);
+      state.write(']');
+    } else {
+      this[node.key.type](node.key, state);
+    }
+    formatSequence(state, node.value.params);
+    state.write(' ');
+    this[node.value.body.type](node.value.body, state);
+  },
+  ClassExpression(node, state) {
+    this.ClassDeclaration(node, state);
+  },
+  ArrowFunctionExpression(node, state) {
+    state.write(node.async ? 'async ' : '', node);
+    const { params } = node;
+    if (params != null) {
+      // Omit parenthesis if only one named parameter
+      if (params.length === 1 && params[0].type[0] === 'I') {
+        // If params[0].type[0] starts with 'I', it can't be `ImportDeclaration` nor `IfStatement` and thus is `Identifier`
+        state.write(params[0].name, params[0]);
+      } else {
+        formatSequence(state, node.params);
+      }
+    }
+    state.write(' => ');
+    if (node.body.type[0] === 'O') {
+      // Body is an object expression
+      state.write('(');
+      this.ObjectExpression(node.body, state);
+      state.write(')');
+    } else {
+      this[node.body.type](node.body, state);
+    }
+  },
+  ThisExpression(node, state) {
+    state.write('this', node);
+  },
+  Super(node, state) {
+    state.write('super', node);
+  },
+  RestElement: (RestElement = function (node, state) {
+    state.write('...');
+    this[node.argument.type](node.argument, state);
+  }),
+  SpreadElement: RestElement,
+  YieldExpression(node, state) {
+    state.write(node.delegate ? 'yield*' : 'yield');
+    if (node.argument) {
+      state.write(' ');
+      this[node.argument.type](node.argument, state);
+    }
+  },
+  AwaitExpression(node, state) {
+    state.write('await ', node);
+    formatExpression(state, node.argument, node);
+  },
+  TemplateLiteral(node, state) {
+    const { quasis, expressions } = node;
+    state.write('`');
+    const { length } = expressions;
+    for (let i = 0; i < length; i++) {
+      const expression = expressions[i];
+      const quasi = quasis[i];
+      state.write(quasi.value.raw, quasi);
+      state.write('${');
+      this[expression.type](expression, state);
+      state.write('}');
+    }
+    const quasi = quasis[quasis.length - 1];
+    state.write(quasi.value.raw, quasi);
+    state.write('`');
+  },
+  TemplateElement(node, state) {
+    state.write(node.value.raw, node);
+  },
+  TaggedTemplateExpression(node, state) {
+    this[node.tag.type](node.tag, state);
+    this[node.quasi.type](node.quasi, state);
+  },
+  ArrayExpression: (ArrayExpression = function (node, state) {
+    state.write('[');
+    if (node.elements.length > 0) {
+      const { elements } = node,
+        { length } = elements;
+      for (let i = 0; ; ) {
+        const element = elements[i];
+        if (element != null) {
+          this[element.type](element, state);
+        }
+        if (++i < length) {
+          state.write(', ');
+        } else {
+          if (element == null) {
+            state.write(', ');
+          }
+          break
+        }
+      }
+    }
+    state.write(']');
+  }),
+  ArrayPattern: ArrayExpression,
+  ObjectExpression(node, state) {
+    const indent = state.indent.repeat(state.indentLevel++);
+    const { lineEnd, writeComments } = state;
+    const propertyIndent = indent + state.indent;
+    state.write('{');
+    if (node.properties.length > 0) {
+      state.write(lineEnd);
+      if (writeComments && node.comments != null) {
+        formatComments(state, node.comments, propertyIndent, lineEnd);
+      }
+      const comma = ',' + lineEnd;
+      const { properties } = node,
+        { length } = properties;
+      for (let i = 0; ; ) {
+        const property = properties[i];
+        if (writeComments && property.comments != null) {
+          formatComments(state, property.comments, propertyIndent, lineEnd);
+        }
+        state.write(propertyIndent);
+        this[property.type](property, state);
+        if (++i < length) {
+          state.write(comma);
+        } else {
+          break
+        }
+      }
+      state.write(lineEnd);
+      if (writeComments && node.trailingComments != null) {
+        formatComments(state, node.trailingComments, propertyIndent, lineEnd);
+      }
+      state.write(indent + '}');
+    } else if (writeComments) {
+      if (node.comments != null) {
+        state.write(lineEnd);
+        formatComments(state, node.comments, propertyIndent, lineEnd);
+        if (node.trailingComments != null) {
+          formatComments(state, node.trailingComments, propertyIndent, lineEnd);
+        }
+        state.write(indent + '}');
+      } else if (node.trailingComments != null) {
+        state.write(lineEnd);
+        formatComments(state, node.trailingComments, propertyIndent, lineEnd);
+        state.write(indent + '}');
+      } else {
+        state.write('}');
+      }
+    } else {
+      state.write('}');
+    }
+    state.indentLevel--;
+  },
+  Property(node, state) {
+    if (node.method || node.kind[0] !== 'i') {
+      // Either a method or of kind `set` or `get` (not `init`)
+      this.MethodDefinition(node, state);
+    } else {
+      if (!node.shorthand) {
+        if (node.computed) {
+          state.write('[');
+          this[node.key.type](node.key, state);
+          state.write(']');
+        } else {
+          this[node.key.type](node.key, state);
+        }
+        state.write(': ');
+      }
+      this[node.value.type](node.value, state);
+    }
+  },
+  ObjectPattern(node, state) {
+    state.write('{');
+    if (node.properties.length > 0) {
+      const { properties } = node,
+        { length } = properties;
+      for (let i = 0; ; ) {
+        this[properties[i].type](properties[i], state);
+        if (++i < length) {
+          state.write(', ');
+        } else {
+          break
+        }
+      }
+    }
+    state.write('}');
+  },
+  SequenceExpression(node, state) {
+    formatSequence(state, node.expressions);
+  },
+  UnaryExpression(node, state) {
+    if (node.prefix) {
+      const {
+        operator,
+        argument,
+        argument: { type },
+      } = node;
+      state.write(operator);
+      const needsParentheses = expressionNeedsParenthesis(state, argument, node);
+      if (
+        !needsParentheses &&
+        (operator.length > 1 ||
+          (type[0] === 'U' &&
+            (type[1] === 'n' || type[1] === 'p') &&
+            argument.prefix &&
+            argument.operator[0] === operator &&
+            (operator === '+' || operator === '-')))
+      ) {
+        // Large operator or argument is UnaryExpression or UpdateExpression node
+        state.write(' ');
+      }
+      if (needsParentheses) {
+        state.write(operator.length > 1 ? ' (' : '(');
+        this[type](argument, state);
+        state.write(')');
+      } else {
+        this[type](argument, state);
+      }
+    } else {
+      // FIXME: This case never occurs
+      this[node.argument.type](node.argument, state);
+      state.write(node.operator);
+    }
+  },
+  UpdateExpression(node, state) {
+    // Always applied to identifiers or members, no parenthesis check needed
+    if (node.prefix) {
+      state.write(node.operator);
+      this[node.argument.type](node.argument, state);
+    } else {
+      this[node.argument.type](node.argument, state);
+      state.write(node.operator);
+    }
+  },
+  AssignmentExpression(node, state) {
+    this[node.left.type](node.left, state);
+    state.write(' ' + node.operator + ' ');
+    this[node.right.type](node.right, state);
+  },
+  AssignmentPattern(node, state) {
+    this[node.left.type](node.left, state);
+    state.write(' = ');
+    this[node.right.type](node.right, state);
+  },
+  BinaryExpression: (BinaryExpression = function (node, state) {
+    const isIn = node.operator === 'in';
+    if (isIn) {
+      // Avoids confusion in `for` loops initializers
+      state.write('(');
+    }
+    formatExpression(state, node.left, node, false);
+    state.write(' ' + node.operator + ' ');
+    formatExpression(state, node.right, node, true);
+    if (isIn) {
+      state.write(')');
+    }
+  }),
+  LogicalExpression: BinaryExpression,
+  ConditionalExpression(node, state) {
+    const { test } = node;
+    const precedence = state.expressionsPrecedence[test.type];
+    if (
+      precedence === NEEDS_PARENTHESES ||
+      precedence <= state.expressionsPrecedence.ConditionalExpression
+    ) {
+      state.write('(');
+      this[test.type](test, state);
+      state.write(')');
+    } else {
+      this[test.type](test, state);
+    }
+    state.write(' ? ');
+    this[node.consequent.type](node.consequent, state);
+    state.write(' : ');
+    this[node.alternate.type](node.alternate, state);
+  },
+  NewExpression(node, state) {
+    state.write('new ');
+    const precedence = state.expressionsPrecedence[node.callee.type];
+    if (
+      precedence === NEEDS_PARENTHESES ||
+      precedence < state.expressionsPrecedence.CallExpression ||
+      hasCallExpression(node.callee)
+    ) {
+      state.write('(');
+      this[node.callee.type](node.callee, state);
+      state.write(')');
+    } else {
+      this[node.callee.type](node.callee, state);
+    }
+    formatSequence(state, node['arguments']);
+  },
+  CallExpression(node, state) {
+    const precedence = state.expressionsPrecedence[node.callee.type];
+    if (
+      precedence === NEEDS_PARENTHESES ||
+      precedence < state.expressionsPrecedence.CallExpression
+    ) {
+      state.write('(');
+      this[node.callee.type](node.callee, state);
+      state.write(')');
+    } else {
+      this[node.callee.type](node.callee, state);
+    }
+    if (node.optional) {
+      state.write('?.');
+    }
+    formatSequence(state, node['arguments']);
+  },
+  ChainExpression(node, state) {
+    this[node.expression.type](node.expression, state);
+  },
+  MemberExpression(node, state) {
+    const precedence = state.expressionsPrecedence[node.object.type];
+    if (
+      precedence === NEEDS_PARENTHESES ||
+      precedence < state.expressionsPrecedence.MemberExpression
+    ) {
+      state.write('(');
+      this[node.object.type](node.object, state);
+      state.write(')');
+    } else {
+      this[node.object.type](node.object, state);
+    }
+    if (node.computed) {
+      if (node.optional) {
+        state.write('?.');
+      }
+      state.write('[');
+      this[node.property.type](node.property, state);
+      state.write(']');
+    } else {
+      if (node.optional) {
+        state.write('?.');
+      } else {
+        state.write('.');
+      }
+      this[node.property.type](node.property, state);
+    }
+  },
+  MetaProperty(node, state) {
+    state.write(node.meta.name + '.' + node.property.name, node);
+  },
+  Identifier(node, state) {
+    state.write(node.name, node);
+  },
+  Literal(node, state) {
+    if (node.raw != null) {
+      // Non-standard property
+      state.write(node.raw, node);
+    } else if (node.regex != null) {
+      this.RegExpLiteral(node, state);
+    } else if (node.bigint != null) {
+      state.write(node.bigint + 'n', node);
+    } else {
+      state.write(stringify(node.value), node);
+    }
+  },
+  RegExpLiteral(node, state) {
+    const { regex } = node;
+    state.write(`/${regex.pattern}/${regex.flags}`, node);
+  },
+};
+
+const EMPTY_OBJECT = {};
+
+class State {
+  constructor(options) {
+    const setup = options == null ? EMPTY_OBJECT : options;
+    this.output = '';
+    // Functional options
+    if (setup.output != null) {
+      this.output = setup.output;
+      this.write = this.writeToStream;
+    } else {
+      this.output = '';
+    }
+    this.generator = setup.generator != null ? setup.generator : GENERATOR;
+    this.expressionsPrecedence =
+      setup.expressionsPrecedence != null
+        ? setup.expressionsPrecedence
+        : EXPRESSIONS_PRECEDENCE;
+    // Formating setup
+    this.indent = setup.indent != null ? setup.indent : '  ';
+    this.lineEnd = setup.lineEnd != null ? setup.lineEnd : '\n';
+    this.indentLevel =
+      setup.startingIndentLevel != null ? setup.startingIndentLevel : 0;
+    this.writeComments = setup.comments ? setup.comments : false;
+    // Source map
+    if (setup.sourceMap != null) {
+      this.write =
+        setup.output == null ? this.writeAndMap : this.writeToStreamAndMap;
+      this.sourceMap = setup.sourceMap;
+      this.line = 1;
+      this.column = 0;
+      this.lineEndSize = this.lineEnd.split('\n').length - 1;
+      this.mapping = {
+        original: null,
+        // Uses the entire state to avoid generating ephemeral objects
+        generated: this,
+        name: undefined,
+        source: setup.sourceMap.file || setup.sourceMap._file,
+      };
+    }
+  }
+
+  write(code) {
+    this.output += code;
+  }
+
+  writeToStream(code) {
+    this.output.write(code);
+  }
+
+  writeAndMap(code, node) {
+    this.output += code;
+    this.map(code, node);
+  }
+
+  writeToStreamAndMap(code, node) {
+    this.output.write(code);
+    this.map(code, node);
+  }
+
+  map(code, node) {
+    if (node != null) {
+      const { type } = node;
+      if (type[0] === 'L' && type[2] === 'n') {
+        // LineComment
+        this.column = 0;
+        this.line++;
+        return
+      }
+      if (node.loc != null) {
+        const { mapping } = this;
+        mapping.original = node.loc.start;
+        mapping.name = node.name;
+        this.sourceMap.addMapping(mapping);
+      }
+      if (
+        (type[0] === 'T' && type[8] === 'E') ||
+        (type[0] === 'L' && type[1] === 'i' && typeof node.value === 'string')
+      ) {
+        // TemplateElement or Literal string node
+        const { length } = code;
+        let { column, line } = this;
+        for (let i = 0; i < length; i++) {
+          if (code[i] === '\n') {
+            column = 0;
+            line++;
+          } else {
+            column++;
+          }
+        }
+        this.column = column;
+        this.line = line;
+        return
+      }
+    }
+    const { length } = code;
+    const { lineEnd } = this;
+    if (length > 0) {
+      if (
+        this.lineEndSize > 0 &&
+        (lineEnd.length === 1
+          ? code[length - 1] === lineEnd
+          : code.endsWith(lineEnd))
+      ) {
+        this.line += this.lineEndSize;
+        this.column = 0;
+      } else {
+        this.column += length;
+      }
+    }
+  }
+
+  toString() {
+    return this.output
+  }
+}
+
+function generate(node, options) {
+  /*
+  Returns a string representing the rendered code of the provided AST `node`.
+  The `options` are:
+
+  - `indent`: string to use for indentation (defaults to `␣␣`)
+  - `lineEnd`: string to use for line endings (defaults to `\n`)
+  - `startingIndentLevel`: indent level to start from (defaults to `0`)
+  - `comments`: generate comments if `true` (defaults to `false`)
+  - `output`: output stream to write the rendered code to (defaults to `null`)
+  - `generator`: custom code generator (defaults to `GENERATOR`)
+  - `expressionsPrecedence`: custom map of node types and their precedence level (defaults to `EXPRESSIONS_PRECEDENCE`)
+  */
+  const state = new State(options);
+  // Travel through the AST node and generate the code
+  state.generator[node.type](node, state);
+  return state.output
 }
 
 // Reserved word lists for various dialects of the language
@@ -5540,6 +6668,141 @@ Parser.acorn = {
   nonASCIIwhitespace: nonASCIIwhitespace
 };
 
+// The main exported interface (under `self.acorn` when in the
+// browser) is a `parse` function that takes a code string and
+// returns an abstract syntax tree as specified by [Mozilla parser
+// API][api].
+//
+// [api]: https://developer.mozilla.org/en-US/docs/SpiderMonkey/Parser_API
+
+function parse(input, options) {
+  return Parser.parse(input, options)
+}
+
+/* -*- Mode: js; js-indent-level: 2; -*- */
+/*
+ * Copyright 2011 Mozilla Foundation and contributors
+ * Licensed under the New BSD license. See LICENSE or:
+ * http://opensource.org/licenses/BSD-3-Clause
+ */
+
+const intToCharMap = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".split("");
+
+/**
+ * Encode an integer in the range of 0 to 63 to a single base 64 digit.
+ */
+var encode$1 = function(number) {
+  if (0 <= number && number < intToCharMap.length) {
+    return intToCharMap[number];
+  }
+  throw new TypeError("Must be between 0 and 63: " + number);
+};
+
+var base64 = {
+	encode: encode$1
+};
+
+/* -*- Mode: js; js-indent-level: 2; -*- */
+/*
+ * Copyright 2011 Mozilla Foundation and contributors
+ * Licensed under the New BSD license. See LICENSE or:
+ * http://opensource.org/licenses/BSD-3-Clause
+ *
+ * Based on the Base 64 VLQ implementation in Closure Compiler:
+ * https://code.google.com/p/closure-compiler/source/browse/trunk/src/com/google/debugging/sourcemap/Base64VLQ.java
+ *
+ * Copyright 2011 The Closure Compiler Authors. All rights reserved.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met:
+ *
+ *  * Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *  * Redistributions in binary form must reproduce the above
+ *    copyright notice, this list of conditions and the following
+ *    disclaimer in the documentation and/or other materials provided
+ *    with the distribution.
+ *  * Neither the name of Google Inc. nor the names of its
+ *    contributors may be used to endorse or promote products derived
+ *    from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+
+
+// A single base 64 digit can contain 6 bits of data. For the base 64 variable
+// length quantities we use in the source map spec, the first bit is the sign,
+// the next four bits are the actual value, and the 6th bit is the
+// continuation bit. The continuation bit tells us whether there are more
+// digits in this value following this digit.
+//
+//   Continuation
+//   |    Sign
+//   |    |
+//   V    V
+//   101011
+
+const VLQ_BASE_SHIFT = 5;
+
+// binary: 100000
+const VLQ_BASE = 1 << VLQ_BASE_SHIFT;
+
+// binary: 011111
+const VLQ_BASE_MASK = VLQ_BASE - 1;
+
+// binary: 100000
+const VLQ_CONTINUATION_BIT = VLQ_BASE;
+
+/**
+ * Converts from a two-complement value to a value where the sign bit is
+ * placed in the least significant bit.  For example, as decimals:
+ *   1 becomes 2 (10 binary), -1 becomes 3 (11 binary)
+ *   2 becomes 4 (100 binary), -2 becomes 5 (101 binary)
+ */
+function toVLQSigned(aValue) {
+  return aValue < 0
+    ? ((-aValue) << 1) + 1
+    : (aValue << 1) + 0;
+}
+
+/**
+ * Returns the base 64 VLQ encoded value.
+ */
+var encode = function base64VLQ_encode(aValue) {
+  let encoded = "";
+  let digit;
+
+  let vlq = toVLQSigned(aValue);
+
+  do {
+    digit = vlq & VLQ_BASE_MASK;
+    vlq >>>= VLQ_BASE_SHIFT;
+    if (vlq > 0) {
+      // There are still more digits in this value, so we must make sure the
+      // continuation bit is marked.
+      digit |= VLQ_CONTINUATION_BIT;
+    }
+    encoded += base64.encode(digit);
+  } while (vlq > 0);
+
+  return encoded;
+};
+
+var base64Vlq = {
+	encode: encode
+};
+
 function createCommonjsModule(fn, module) {
 	return module = { exports: {} }, fn(module, module.exports), module.exports;
 }
@@ -6120,7 +7383,7 @@ util.computeSourceURL;
  * element is O(1). Removing elements from the set is not supported. Only
  * strings are supported for membership.
  */
-class ArraySet$1 {
+class ArraySet$2 {
   constructor() {
     this._array = [];
     this._set = new Map();
@@ -6130,7 +7393,7 @@ class ArraySet$1 {
    * Static method for creating ArraySet instances from an existing array.
    */
   static fromArray(aArray, aAllowDuplicates) {
-    const set = new ArraySet$1();
+    const set = new ArraySet$2();
     for (let i = 0, len = aArray.length; i < len; i++) {
       set.add(aArray[i], aAllowDuplicates);
     }
@@ -6206,10 +7469,507 @@ class ArraySet$1 {
     return this._array.slice();
   }
 }
-var ArraySet_1 = ArraySet$1;
+var ArraySet_1 = ArraySet$2;
 
 var arraySet = {
 	ArraySet: ArraySet_1
+};
+
+/* -*- Mode: js; js-indent-level: 2; -*- */
+/*
+ * Copyright 2014 Mozilla Foundation and contributors
+ * Licensed under the New BSD license. See LICENSE or:
+ * http://opensource.org/licenses/BSD-3-Clause
+ */
+
+
+
+/**
+ * Determine whether mappingB is after mappingA with respect to generated
+ * position.
+ */
+function generatedPositionAfter(mappingA, mappingB) {
+  // Optimized for most common case
+  const lineA = mappingA.generatedLine;
+  const lineB = mappingB.generatedLine;
+  const columnA = mappingA.generatedColumn;
+  const columnB = mappingB.generatedColumn;
+  return lineB > lineA || lineB == lineA && columnB >= columnA ||
+         util.compareByGeneratedPositionsInflated(mappingA, mappingB) <= 0;
+}
+
+/**
+ * A data structure to provide a sorted view of accumulated mappings in a
+ * performance conscious manner. It trades a negligible overhead in general
+ * case for a large speedup in case of mappings being added in order.
+ */
+class MappingList$1 {
+  constructor() {
+    this._array = [];
+    this._sorted = true;
+    // Serves as infimum
+    this._last = {generatedLine: -1, generatedColumn: 0};
+  }
+
+  /**
+   * Iterate through internal items. This method takes the same arguments that
+   * `Array.prototype.forEach` takes.
+   *
+   * NOTE: The order of the mappings is NOT guaranteed.
+   */
+  unsortedForEach(aCallback, aThisArg) {
+    this._array.forEach(aCallback, aThisArg);
+  }
+
+  /**
+   * Add the given source mapping.
+   *
+   * @param Object aMapping
+   */
+  add(aMapping) {
+    if (generatedPositionAfter(this._last, aMapping)) {
+      this._last = aMapping;
+      this._array.push(aMapping);
+    } else {
+      this._sorted = false;
+      this._array.push(aMapping);
+    }
+  }
+
+  /**
+   * Returns the flat, sorted array of mappings. The mappings are sorted by
+   * generated position.
+   *
+   * WARNING: This method returns internal data without copying, for
+   * performance. The return value must NOT be mutated, and should be treated as
+   * an immutable borrow. If you want to take ownership, you must make your own
+   * copy.
+   */
+  toArray() {
+    if (!this._sorted) {
+      this._array.sort(util.compareByGeneratedPositionsInflated);
+      this._sorted = true;
+    }
+    return this._array;
+  }
+}
+
+var MappingList_1 = MappingList$1;
+
+var mappingList = {
+	MappingList: MappingList_1
+};
+
+/* -*- Mode: js; js-indent-level: 2; -*- */
+/*
+ * Copyright 2011 Mozilla Foundation and contributors
+ * Licensed under the New BSD license. See LICENSE or:
+ * http://opensource.org/licenses/BSD-3-Clause
+ */
+
+
+
+const ArraySet$1 = arraySet.ArraySet;
+const MappingList = mappingList.MappingList;
+
+/**
+ * An instance of the SourceMapGenerator represents a source map which is
+ * being built incrementally. You may pass an object with the following
+ * properties:
+ *
+ *   - file: The filename of the generated source.
+ *   - sourceRoot: A root for all relative URLs in this source map.
+ */
+class SourceMapGenerator$2 {
+  constructor(aArgs) {
+    if (!aArgs) {
+      aArgs = {};
+    }
+    this._file = util.getArg(aArgs, "file", null);
+    this._sourceRoot = util.getArg(aArgs, "sourceRoot", null);
+    this._skipValidation = util.getArg(aArgs, "skipValidation", false);
+    this._sources = new ArraySet$1();
+    this._names = new ArraySet$1();
+    this._mappings = new MappingList();
+    this._sourcesContents = null;
+  }
+
+  /**
+   * Creates a new SourceMapGenerator based on a SourceMapConsumer
+   *
+   * @param aSourceMapConsumer The SourceMap.
+   */
+  static fromSourceMap(aSourceMapConsumer) {
+    const sourceRoot = aSourceMapConsumer.sourceRoot;
+    const generator = new SourceMapGenerator$2({
+      file: aSourceMapConsumer.file,
+      sourceRoot
+    });
+    aSourceMapConsumer.eachMapping(function(mapping) {
+      const newMapping = {
+        generated: {
+          line: mapping.generatedLine,
+          column: mapping.generatedColumn
+        }
+      };
+
+      if (mapping.source != null) {
+        newMapping.source = mapping.source;
+        if (sourceRoot != null) {
+          newMapping.source = util.relative(sourceRoot, newMapping.source);
+        }
+
+        newMapping.original = {
+          line: mapping.originalLine,
+          column: mapping.originalColumn
+        };
+
+        if (mapping.name != null) {
+          newMapping.name = mapping.name;
+        }
+      }
+
+      generator.addMapping(newMapping);
+    });
+    aSourceMapConsumer.sources.forEach(function(sourceFile) {
+      let sourceRelative = sourceFile;
+      if (sourceRoot !== null) {
+        sourceRelative = util.relative(sourceRoot, sourceFile);
+      }
+
+      if (!generator._sources.has(sourceRelative)) {
+        generator._sources.add(sourceRelative);
+      }
+
+      const content = aSourceMapConsumer.sourceContentFor(sourceFile);
+      if (content != null) {
+        generator.setSourceContent(sourceFile, content);
+      }
+    });
+    return generator;
+  }
+
+  /**
+   * Add a single mapping from original source line and column to the generated
+   * source's line and column for this source map being created. The mapping
+   * object should have the following properties:
+   *
+   *   - generated: An object with the generated line and column positions.
+   *   - original: An object with the original line and column positions.
+   *   - source: The original source file (relative to the sourceRoot).
+   *   - name: An optional original token name for this mapping.
+   */
+  addMapping(aArgs) {
+    const generated = util.getArg(aArgs, "generated");
+    const original = util.getArg(aArgs, "original", null);
+    let source = util.getArg(aArgs, "source", null);
+    let name = util.getArg(aArgs, "name", null);
+
+    if (!this._skipValidation) {
+      this._validateMapping(generated, original, source, name);
+    }
+
+    if (source != null) {
+      source = String(source);
+      if (!this._sources.has(source)) {
+        this._sources.add(source);
+      }
+    }
+
+    if (name != null) {
+      name = String(name);
+      if (!this._names.has(name)) {
+        this._names.add(name);
+      }
+    }
+
+    this._mappings.add({
+      generatedLine: generated.line,
+      generatedColumn: generated.column,
+      originalLine: original != null && original.line,
+      originalColumn: original != null && original.column,
+      source,
+      name
+    });
+  }
+
+  /**
+   * Set the source content for a source file.
+   */
+  setSourceContent(aSourceFile, aSourceContent) {
+    let source = aSourceFile;
+    if (this._sourceRoot != null) {
+      source = util.relative(this._sourceRoot, source);
+    }
+
+    if (aSourceContent != null) {
+      // Add the source content to the _sourcesContents map.
+      // Create a new _sourcesContents map if the property is null.
+      if (!this._sourcesContents) {
+        this._sourcesContents = Object.create(null);
+      }
+      this._sourcesContents[util.toSetString(source)] = aSourceContent;
+    } else if (this._sourcesContents) {
+      // Remove the source file from the _sourcesContents map.
+      // If the _sourcesContents map is empty, set the property to null.
+      delete this._sourcesContents[util.toSetString(source)];
+      if (Object.keys(this._sourcesContents).length === 0) {
+        this._sourcesContents = null;
+      }
+    }
+  }
+
+  /**
+   * Applies the mappings of a sub-source-map for a specific source file to the
+   * source map being generated. Each mapping to the supplied source file is
+   * rewritten using the supplied source map. Note: The resolution for the
+   * resulting mappings is the minimium of this map and the supplied map.
+   *
+   * @param aSourceMapConsumer The source map to be applied.
+   * @param aSourceFile Optional. The filename of the source file.
+   *        If omitted, SourceMapConsumer's file property will be used.
+   * @param aSourceMapPath Optional. The dirname of the path to the source map
+   *        to be applied. If relative, it is relative to the SourceMapConsumer.
+   *        This parameter is needed when the two source maps aren't in the same
+   *        directory, and the source map to be applied contains relative source
+   *        paths. If so, those relative source paths need to be rewritten
+   *        relative to the SourceMapGenerator.
+   */
+  applySourceMap(aSourceMapConsumer, aSourceFile, aSourceMapPath) {
+    let sourceFile = aSourceFile;
+    // If aSourceFile is omitted, we will use the file property of the SourceMap
+    if (aSourceFile == null) {
+      if (aSourceMapConsumer.file == null) {
+        throw new Error(
+          "SourceMapGenerator.prototype.applySourceMap requires either an explicit source file, " +
+          'or the source map\'s "file" property. Both were omitted.'
+        );
+      }
+      sourceFile = aSourceMapConsumer.file;
+    }
+    const sourceRoot = this._sourceRoot;
+    // Make "sourceFile" relative if an absolute Url is passed.
+    if (sourceRoot != null) {
+      sourceFile = util.relative(sourceRoot, sourceFile);
+    }
+    // Applying the SourceMap can add and remove items from the sources and
+    // the names array.
+    const newSources = this._mappings.toArray().length > 0
+      ? new ArraySet$1()
+      : this._sources;
+    const newNames = new ArraySet$1();
+
+    // Find mappings for the "sourceFile"
+    this._mappings.unsortedForEach(function(mapping) {
+      if (mapping.source === sourceFile && mapping.originalLine != null) {
+        // Check if it can be mapped by the source map, then update the mapping.
+        const original = aSourceMapConsumer.originalPositionFor({
+          line: mapping.originalLine,
+          column: mapping.originalColumn
+        });
+        if (original.source != null) {
+          // Copy mapping
+          mapping.source = original.source;
+          if (aSourceMapPath != null) {
+            mapping.source = util.join(aSourceMapPath, mapping.source);
+          }
+          if (sourceRoot != null) {
+            mapping.source = util.relative(sourceRoot, mapping.source);
+          }
+          mapping.originalLine = original.line;
+          mapping.originalColumn = original.column;
+          if (original.name != null) {
+            mapping.name = original.name;
+          }
+        }
+      }
+
+      const source = mapping.source;
+      if (source != null && !newSources.has(source)) {
+        newSources.add(source);
+      }
+
+      const name = mapping.name;
+      if (name != null && !newNames.has(name)) {
+        newNames.add(name);
+      }
+
+    }, this);
+    this._sources = newSources;
+    this._names = newNames;
+
+    // Copy sourcesContents of applied map.
+    aSourceMapConsumer.sources.forEach(function(srcFile) {
+      const content = aSourceMapConsumer.sourceContentFor(srcFile);
+      if (content != null) {
+        if (aSourceMapPath != null) {
+          srcFile = util.join(aSourceMapPath, srcFile);
+        }
+        if (sourceRoot != null) {
+          srcFile = util.relative(sourceRoot, srcFile);
+        }
+        this.setSourceContent(srcFile, content);
+      }
+    }, this);
+  }
+
+  /**
+   * A mapping can have one of the three levels of data:
+   *
+   *   1. Just the generated position.
+   *   2. The Generated position, original position, and original source.
+   *   3. Generated and original position, original source, as well as a name
+   *      token.
+   *
+   * To maintain consistency, we validate that any new mapping being added falls
+   * in to one of these categories.
+   */
+  _validateMapping(aGenerated, aOriginal, aSource, aName) {
+    // When aOriginal is truthy but has empty values for .line and .column,
+    // it is most likely a programmer error. In this case we throw a very
+    // specific error message to try to guide them the right way.
+    // For example: https://github.com/Polymer/polymer-bundler/pull/519
+    if (aOriginal && typeof aOriginal.line !== "number" && typeof aOriginal.column !== "number") {
+        throw new Error(
+            "original.line and original.column are not numbers -- you probably meant to omit " +
+            "the original mapping entirely and only map the generated position. If so, pass " +
+            "null for the original mapping instead of an object with empty or null values."
+        );
+    }
+
+    if (aGenerated && "line" in aGenerated && "column" in aGenerated
+        && aGenerated.line > 0 && aGenerated.column >= 0
+        && !aOriginal && !aSource && !aName) ; else if (aGenerated && "line" in aGenerated && "column" in aGenerated
+             && aOriginal && "line" in aOriginal && "column" in aOriginal
+             && aGenerated.line > 0 && aGenerated.column >= 0
+             && aOriginal.line > 0 && aOriginal.column >= 0
+             && aSource) ; else {
+      throw new Error("Invalid mapping: " + JSON.stringify({
+        generated: aGenerated,
+        source: aSource,
+        original: aOriginal,
+        name: aName
+      }));
+    }
+  }
+
+  /**
+   * Serialize the accumulated mappings in to the stream of base 64 VLQs
+   * specified by the source map format.
+   */
+  _serializeMappings() {
+    let previousGeneratedColumn = 0;
+    let previousGeneratedLine = 1;
+    let previousOriginalColumn = 0;
+    let previousOriginalLine = 0;
+    let previousName = 0;
+    let previousSource = 0;
+    let result = "";
+    let next;
+    let mapping;
+    let nameIdx;
+    let sourceIdx;
+
+    const mappings = this._mappings.toArray();
+    for (let i = 0, len = mappings.length; i < len; i++) {
+      mapping = mappings[i];
+      next = "";
+
+      if (mapping.generatedLine !== previousGeneratedLine) {
+        previousGeneratedColumn = 0;
+        while (mapping.generatedLine !== previousGeneratedLine) {
+          next += ";";
+          previousGeneratedLine++;
+        }
+      } else if (i > 0) {
+        if (!util.compareByGeneratedPositionsInflated(mapping, mappings[i - 1])) {
+          continue;
+        }
+        next += ",";
+      }
+
+      next += base64Vlq.encode(mapping.generatedColumn
+                                 - previousGeneratedColumn);
+      previousGeneratedColumn = mapping.generatedColumn;
+
+      if (mapping.source != null) {
+        sourceIdx = this._sources.indexOf(mapping.source);
+        next += base64Vlq.encode(sourceIdx - previousSource);
+        previousSource = sourceIdx;
+
+        // lines are stored 0-based in SourceMap spec version 3
+        next += base64Vlq.encode(mapping.originalLine - 1
+                                   - previousOriginalLine);
+        previousOriginalLine = mapping.originalLine - 1;
+
+        next += base64Vlq.encode(mapping.originalColumn
+                                   - previousOriginalColumn);
+        previousOriginalColumn = mapping.originalColumn;
+
+        if (mapping.name != null) {
+          nameIdx = this._names.indexOf(mapping.name);
+          next += base64Vlq.encode(nameIdx - previousName);
+          previousName = nameIdx;
+        }
+      }
+
+      result += next;
+    }
+
+    return result;
+  }
+
+  _generateSourcesContent(aSources, aSourceRoot) {
+    return aSources.map(function(source) {
+      if (!this._sourcesContents) {
+        return null;
+      }
+      if (aSourceRoot != null) {
+        source = util.relative(aSourceRoot, source);
+      }
+      const key = util.toSetString(source);
+      return Object.prototype.hasOwnProperty.call(this._sourcesContents, key)
+        ? this._sourcesContents[key]
+        : null;
+    }, this);
+  }
+
+  /**
+   * Externalize the source map.
+   */
+  toJSON() {
+    const map = {
+      version: this._version,
+      sources: this._sources.toArray(),
+      names: this._names.toArray(),
+      mappings: this._serializeMappings()
+    };
+    if (this._file != null) {
+      map.file = this._file;
+    }
+    if (this._sourceRoot != null) {
+      map.sourceRoot = this._sourceRoot;
+    }
+    if (this._sourcesContents) {
+      map.sourcesContent = this._generateSourcesContent(map.sources, map.sourceRoot);
+    }
+
+    return map;
+  }
+
+  /**
+   * Render the source map being generated to a string.
+   */
+  toString() {
+    return JSON.stringify(this.toJSON());
+  }
+}
+
+SourceMapGenerator$2.prototype._version = 3;
+var SourceMapGenerator_1 = SourceMapGenerator$2;
+
+var sourceMapGenerator = {
+	SourceMapGenerator: SourceMapGenerator_1
 };
 
 var binarySearch = createCommonjsModule(function (module, exports) {
@@ -6491,7 +8251,7 @@ const ArraySet = arraySet.ArraySet;
 
 const INTERNAL = Symbol("smcInternal");
 
-class SourceMapConsumer {
+class SourceMapConsumer$1 {
   constructor(aSourceMap, aSourceMapURL) {
     // If the constructor was called by super(), just return Promise<this>.
     // Yes, this is a hack to retain the pre-existing API of the base-class
@@ -6548,7 +8308,7 @@ class SourceMapConsumer {
     // should really be.
 
     let consumer = null;
-    const promise = new SourceMapConsumer(rawSourceMap, sourceMapUrl);
+    const promise = new SourceMapConsumer$1(rawSourceMap, sourceMapUrl);
     return promise
       .then(c => {
         consumer = c;
@@ -6630,12 +8390,14 @@ class SourceMapConsumer {
 /**
  * The version of the source mapping spec that we are consuming.
  */
-SourceMapConsumer.prototype._version = 3;
-SourceMapConsumer.GENERATED_ORDER = 1;
-SourceMapConsumer.ORIGINAL_ORDER = 2;
+SourceMapConsumer$1.prototype._version = 3;
+SourceMapConsumer$1.GENERATED_ORDER = 1;
+SourceMapConsumer$1.ORIGINAL_ORDER = 2;
 
-SourceMapConsumer.GREATEST_LOWER_BOUND = 1;
-SourceMapConsumer.LEAST_UPPER_BOUND = 2;
+SourceMapConsumer$1.GREATEST_LOWER_BOUND = 1;
+SourceMapConsumer$1.LEAST_UPPER_BOUND = 2;
+
+var SourceMapConsumer_1 = SourceMapConsumer$1;
 
 /**
  * A BasicSourceMapConsumer instance represents a parsed source map which we can
@@ -6671,7 +8433,7 @@ SourceMapConsumer.LEAST_UPPER_BOUND = 2;
  *
  * [0]: https://docs.google.com/document/d/1U1RGAehQwRypUTovF1KRlpiOFze0b-_2gc6fAH0KY0k/edit?pli=1#
  */
-class BasicSourceMapConsumer extends SourceMapConsumer {
+class BasicSourceMapConsumer extends SourceMapConsumer$1 {
   constructor(aSourceMap, aSourceMapURL) {
     return super(INTERNAL).then(that => {
       let sourceMap = aSourceMap;
@@ -6840,7 +8602,7 @@ class BasicSourceMapConsumer extends SourceMapConsumer {
 
   eachMapping(aCallback, aContext, aOrder) {
     const context = aContext || null;
-    const order = aOrder || SourceMapConsumer.GENERATED_ORDER;
+    const order = aOrder || SourceMapConsumer$1.GENERATED_ORDER;
     const sourceRoot = this.sourceRoot;
 
     this._wasm.withMappingCallback(
@@ -6858,10 +8620,10 @@ class BasicSourceMapConsumer extends SourceMapConsumer {
       },
       () => {
         switch (order) {
-        case SourceMapConsumer.GENERATED_ORDER:
+        case SourceMapConsumer$1.GENERATED_ORDER:
           this._wasm.exports.by_generated_location(this._getMappingsPtr());
           break;
-        case SourceMapConsumer.ORIGINAL_ORDER:
+        case SourceMapConsumer$1.ORIGINAL_ORDER:
           this._wasm.exports.by_original_location(this._getMappingsPtr());
           break;
         default:
@@ -6974,9 +8736,9 @@ class BasicSourceMapConsumer extends SourceMapConsumer {
       throw new Error("Column numbers must be >= 0");
     }
 
-    let bias = util.getArg(aArgs, "bias", SourceMapConsumer.GREATEST_LOWER_BOUND);
+    let bias = util.getArg(aArgs, "bias", SourceMapConsumer$1.GREATEST_LOWER_BOUND);
     if (bias == null) {
-      bias = SourceMapConsumer.GREATEST_LOWER_BOUND;
+      bias = SourceMapConsumer$1.GREATEST_LOWER_BOUND;
     }
 
     let mapping;
@@ -7129,9 +8891,9 @@ class BasicSourceMapConsumer extends SourceMapConsumer {
       throw new Error("Column numbers must be >= 0");
     }
 
-    let bias = util.getArg(aArgs, "bias", SourceMapConsumer.GREATEST_LOWER_BOUND);
+    let bias = util.getArg(aArgs, "bias", SourceMapConsumer$1.GREATEST_LOWER_BOUND);
     if (bias == null) {
-      bias = SourceMapConsumer.GREATEST_LOWER_BOUND;
+      bias = SourceMapConsumer$1.GREATEST_LOWER_BOUND;
     }
 
     let mapping;
@@ -7167,7 +8929,8 @@ class BasicSourceMapConsumer extends SourceMapConsumer {
   }
 }
 
-BasicSourceMapConsumer.prototype.consumer = SourceMapConsumer;
+BasicSourceMapConsumer.prototype.consumer = SourceMapConsumer$1;
+var BasicSourceMapConsumer_1 = BasicSourceMapConsumer;
 
 /**
  * An IndexedSourceMapConsumer instance represents a parsed source map which
@@ -7218,7 +8981,7 @@ BasicSourceMapConsumer.prototype.consumer = SourceMapConsumer;
  *
  * [0]: https://docs.google.com/document/d/1U1RGAehQwRypUTovF1KRlpiOFze0b-_2gc6fAH0KY0k/edit#heading=h.535es3xeprgt
  */
-class IndexedSourceMapConsumer extends SourceMapConsumer {
+class IndexedSourceMapConsumer extends SourceMapConsumer$1 {
   constructor(aSourceMap, aSourceMapURL) {
     return super(INTERNAL).then(that => {
       let sourceMap = aSourceMap;
@@ -7260,7 +9023,7 @@ class IndexedSourceMapConsumer extends SourceMapConsumer {
         }
         lastOffset = offset;
 
-        const cons = new SourceMapConsumer(util.getArg(s, "map"), aSourceMapURL);
+        const cons = new SourceMapConsumer$1(util.getArg(s, "map"), aSourceMapURL);
         return cons.then(consumer => {
           return {
             generatedOffset: {
@@ -7559,14 +9322,14 @@ class IndexedSourceMapConsumer extends SourceMapConsumer {
 
   eachMapping(aCallback, aContext, aOrder) {
     const context = aContext || null;
-    const order = aOrder || SourceMapConsumer.GENERATED_ORDER;
+    const order = aOrder || SourceMapConsumer$1.GENERATED_ORDER;
 
     let mappings;
     switch (order) {
-    case SourceMapConsumer.GENERATED_ORDER:
+    case SourceMapConsumer$1.GENERATED_ORDER:
       mappings = this._generatedMappings;
       break;
-    case SourceMapConsumer.ORIGINAL_ORDER:
+    case SourceMapConsumer$1.ORIGINAL_ORDER:
       mappings = this._originalMappings;
       break;
     default:
@@ -7705,6 +9468,7 @@ class IndexedSourceMapConsumer extends SourceMapConsumer {
     }
   }
 }
+var IndexedSourceMapConsumer_1 = IndexedSourceMapConsumer;
 
 /*
  * Cheat to get around inter-twingled classes.  `factory()` can be at the end
@@ -7726,16 +9490,747 @@ function _factoryBSM(aSourceMap, aSourceMapURL) {
   return BasicSourceMapConsumer.fromSourceMap(aSourceMap, aSourceMapURL);
 }
 
+var sourceMapConsumer = {
+	SourceMapConsumer: SourceMapConsumer_1,
+	BasicSourceMapConsumer: BasicSourceMapConsumer_1,
+	IndexedSourceMapConsumer: IndexedSourceMapConsumer_1
+};
+
+/* -*- Mode: js; js-indent-level: 2; -*- */
+/*
+ * Copyright 2011 Mozilla Foundation and contributors
+ * Licensed under the New BSD license. See LICENSE or:
+ * http://opensource.org/licenses/BSD-3-Clause
+ */
+
+const SourceMapGenerator$1 = sourceMapGenerator.SourceMapGenerator;
+
+
+// Matches a Windows-style `\r\n` newline or a `\n` newline used by all other
+// operating systems these days (capturing the result).
+const REGEX_NEWLINE = /(\r?\n)/;
+
+// Newline character code for charCodeAt() comparisons
+const NEWLINE_CODE = 10;
+
+// Private symbol for identifying `SourceNode`s when multiple versions of
+// the source-map library are loaded. This MUST NOT CHANGE across
+// versions!
+const isSourceNode = "$$$isSourceNode$$$";
+
+/**
+ * SourceNodes provide a way to abstract over interpolating/concatenating
+ * snippets of generated JavaScript source code while maintaining the line and
+ * column information associated with the original source code.
+ *
+ * @param aLine The original line number.
+ * @param aColumn The original column number.
+ * @param aSource The original source's filename.
+ * @param aChunks Optional. An array of strings which are snippets of
+ *        generated JS, or other SourceNodes.
+ * @param aName The original identifier.
+ */
+class SourceNode$1 {
+  constructor(aLine, aColumn, aSource, aChunks, aName) {
+    this.children = [];
+    this.sourceContents = {};
+    this.line = aLine == null ? null : aLine;
+    this.column = aColumn == null ? null : aColumn;
+    this.source = aSource == null ? null : aSource;
+    this.name = aName == null ? null : aName;
+    this[isSourceNode] = true;
+    if (aChunks != null) this.add(aChunks);
+  }
+
+  /**
+   * Creates a SourceNode from generated code and a SourceMapConsumer.
+   *
+   * @param aGeneratedCode The generated code
+   * @param aSourceMapConsumer The SourceMap for the generated code
+   * @param aRelativePath Optional. The path that relative sources in the
+   *        SourceMapConsumer should be relative to.
+   */
+  static fromStringWithSourceMap(aGeneratedCode, aSourceMapConsumer, aRelativePath) {
+    // The SourceNode we want to fill with the generated code
+    // and the SourceMap
+    const node = new SourceNode$1();
+
+    // All even indices of this array are one line of the generated code,
+    // while all odd indices are the newlines between two adjacent lines
+    // (since `REGEX_NEWLINE` captures its match).
+    // Processed fragments are accessed by calling `shiftNextLine`.
+    const remainingLines = aGeneratedCode.split(REGEX_NEWLINE);
+    let remainingLinesIndex = 0;
+    const shiftNextLine = function() {
+      const lineContents = getNextLine();
+      // The last line of a file might not have a newline.
+      const newLine = getNextLine() || "";
+      return lineContents + newLine;
+
+      function getNextLine() {
+        return remainingLinesIndex < remainingLines.length ?
+            remainingLines[remainingLinesIndex++] : undefined;
+      }
+    };
+
+    // We need to remember the position of "remainingLines"
+    let lastGeneratedLine = 1, lastGeneratedColumn = 0;
+
+    // The generate SourceNodes we need a code range.
+    // To extract it current and last mapping is used.
+    // Here we store the last mapping.
+    let lastMapping = null;
+    let nextLine;
+
+    aSourceMapConsumer.eachMapping(function(mapping) {
+      if (lastMapping !== null) {
+        // We add the code from "lastMapping" to "mapping":
+        // First check if there is a new line in between.
+        if (lastGeneratedLine < mapping.generatedLine) {
+          // Associate first line with "lastMapping"
+          addMappingWithCode(lastMapping, shiftNextLine());
+          lastGeneratedLine++;
+          lastGeneratedColumn = 0;
+          // The remaining code is added without mapping
+        } else {
+          // There is no new line in between.
+          // Associate the code between "lastGeneratedColumn" and
+          // "mapping.generatedColumn" with "lastMapping"
+          nextLine = remainingLines[remainingLinesIndex] || "";
+          const code = nextLine.substr(0, mapping.generatedColumn -
+                                        lastGeneratedColumn);
+          remainingLines[remainingLinesIndex] = nextLine.substr(mapping.generatedColumn -
+                                              lastGeneratedColumn);
+          lastGeneratedColumn = mapping.generatedColumn;
+          addMappingWithCode(lastMapping, code);
+          // No more remaining code, continue
+          lastMapping = mapping;
+          return;
+        }
+      }
+      // We add the generated code until the first mapping
+      // to the SourceNode without any mapping.
+      // Each line is added as separate string.
+      while (lastGeneratedLine < mapping.generatedLine) {
+        node.add(shiftNextLine());
+        lastGeneratedLine++;
+      }
+      if (lastGeneratedColumn < mapping.generatedColumn) {
+        nextLine = remainingLines[remainingLinesIndex] || "";
+        node.add(nextLine.substr(0, mapping.generatedColumn));
+        remainingLines[remainingLinesIndex] = nextLine.substr(mapping.generatedColumn);
+        lastGeneratedColumn = mapping.generatedColumn;
+      }
+      lastMapping = mapping;
+    }, this);
+    // We have processed all mappings.
+    if (remainingLinesIndex < remainingLines.length) {
+      if (lastMapping) {
+        // Associate the remaining code in the current line with "lastMapping"
+        addMappingWithCode(lastMapping, shiftNextLine());
+      }
+      // and add the remaining lines without any mapping
+      node.add(remainingLines.splice(remainingLinesIndex).join(""));
+    }
+
+    // Copy sourcesContent into SourceNode
+    aSourceMapConsumer.sources.forEach(function(sourceFile) {
+      const content = aSourceMapConsumer.sourceContentFor(sourceFile);
+      if (content != null) {
+        if (aRelativePath != null) {
+          sourceFile = util.join(aRelativePath, sourceFile);
+        }
+        node.setSourceContent(sourceFile, content);
+      }
+    });
+
+    return node;
+
+    function addMappingWithCode(mapping, code) {
+      if (mapping === null || mapping.source === undefined) {
+        node.add(code);
+      } else {
+        const source = aRelativePath
+          ? util.join(aRelativePath, mapping.source)
+          : mapping.source;
+        node.add(new SourceNode$1(mapping.originalLine,
+                                mapping.originalColumn,
+                                source,
+                                code,
+                                mapping.name));
+      }
+    }
+  }
+
+  /**
+   * Add a chunk of generated JS to this source node.
+   *
+   * @param aChunk A string snippet of generated JS code, another instance of
+   *        SourceNode, or an array where each member is one of those things.
+   */
+  add(aChunk) {
+    if (Array.isArray(aChunk)) {
+      aChunk.forEach(function(chunk) {
+        this.add(chunk);
+      }, this);
+    } else if (aChunk[isSourceNode] || typeof aChunk === "string") {
+      if (aChunk) {
+        this.children.push(aChunk);
+      }
+    } else {
+      throw new TypeError(
+        "Expected a SourceNode, string, or an array of SourceNodes and strings. Got " + aChunk
+      );
+    }
+    return this;
+  }
+
+  /**
+   * Add a chunk of generated JS to the beginning of this source node.
+   *
+   * @param aChunk A string snippet of generated JS code, another instance of
+   *        SourceNode, or an array where each member is one of those things.
+   */
+  prepend(aChunk) {
+    if (Array.isArray(aChunk)) {
+      for (let i = aChunk.length - 1; i >= 0; i--) {
+        this.prepend(aChunk[i]);
+      }
+    } else if (aChunk[isSourceNode] || typeof aChunk === "string") {
+      this.children.unshift(aChunk);
+    } else {
+      throw new TypeError(
+        "Expected a SourceNode, string, or an array of SourceNodes and strings. Got " + aChunk
+      );
+    }
+    return this;
+  }
+
+  /**
+   * Walk over the tree of JS snippets in this node and its children. The
+   * walking function is called once for each snippet of JS and is passed that
+   * snippet and the its original associated source's line/column location.
+   *
+   * @param aFn The traversal function.
+   */
+  walk(aFn) {
+    let chunk;
+    for (let i = 0, len = this.children.length; i < len; i++) {
+      chunk = this.children[i];
+      if (chunk[isSourceNode]) {
+        chunk.walk(aFn);
+      } else if (chunk !== "") {
+        aFn(chunk, { source: this.source,
+                      line: this.line,
+                      column: this.column,
+                      name: this.name });
+      }
+    }
+  }
+
+  /**
+   * Like `String.prototype.join` except for SourceNodes. Inserts `aStr` between
+   * each of `this.children`.
+   *
+   * @param aSep The separator.
+   */
+  join(aSep) {
+    let newChildren;
+    let i;
+    const len = this.children.length;
+    if (len > 0) {
+      newChildren = [];
+      for (i = 0; i < len - 1; i++) {
+        newChildren.push(this.children[i]);
+        newChildren.push(aSep);
+      }
+      newChildren.push(this.children[i]);
+      this.children = newChildren;
+    }
+    return this;
+  }
+
+  /**
+   * Call String.prototype.replace on the very right-most source snippet. Useful
+   * for trimming whitespace from the end of a source node, etc.
+   *
+   * @param aPattern The pattern to replace.
+   * @param aReplacement The thing to replace the pattern with.
+   */
+  replaceRight(aPattern, aReplacement) {
+    const lastChild = this.children[this.children.length - 1];
+    if (lastChild[isSourceNode]) {
+      lastChild.replaceRight(aPattern, aReplacement);
+    } else if (typeof lastChild === "string") {
+      this.children[this.children.length - 1] = lastChild.replace(aPattern, aReplacement);
+    } else {
+      this.children.push("".replace(aPattern, aReplacement));
+    }
+    return this;
+  }
+
+  /**
+   * Set the source content for a source file. This will be added to the SourceMapGenerator
+   * in the sourcesContent field.
+   *
+   * @param aSourceFile The filename of the source file
+   * @param aSourceContent The content of the source file
+   */
+  setSourceContent(aSourceFile, aSourceContent) {
+    this.sourceContents[util.toSetString(aSourceFile)] = aSourceContent;
+  }
+
+  /**
+   * Walk over the tree of SourceNodes. The walking function is called for each
+   * source file content and is passed the filename and source content.
+   *
+   * @param aFn The traversal function.
+   */
+  walkSourceContents(aFn) {
+    for (let i = 0, len = this.children.length; i < len; i++) {
+      if (this.children[i][isSourceNode]) {
+        this.children[i].walkSourceContents(aFn);
+      }
+    }
+
+    const sources = Object.keys(this.sourceContents);
+    for (let i = 0, len = sources.length; i < len; i++) {
+      aFn(util.fromSetString(sources[i]), this.sourceContents[sources[i]]);
+    }
+  }
+
+  /**
+   * Return the string representation of this source node. Walks over the tree
+   * and concatenates all the various snippets together to one string.
+   */
+  toString() {
+    let str = "";
+    this.walk(function(chunk) {
+      str += chunk;
+    });
+    return str;
+  }
+
+  /**
+   * Returns the string representation of this source node along with a source
+   * map.
+   */
+  toStringWithSourceMap(aArgs) {
+    const generated = {
+      code: "",
+      line: 1,
+      column: 0
+    };
+    const map = new SourceMapGenerator$1(aArgs);
+    let sourceMappingActive = false;
+    let lastOriginalSource = null;
+    let lastOriginalLine = null;
+    let lastOriginalColumn = null;
+    let lastOriginalName = null;
+    this.walk(function(chunk, original) {
+      generated.code += chunk;
+      if (original.source !== null
+          && original.line !== null
+          && original.column !== null) {
+        if (lastOriginalSource !== original.source
+          || lastOriginalLine !== original.line
+          || lastOriginalColumn !== original.column
+          || lastOriginalName !== original.name) {
+          map.addMapping({
+            source: original.source,
+            original: {
+              line: original.line,
+              column: original.column
+            },
+            generated: {
+              line: generated.line,
+              column: generated.column
+            },
+            name: original.name
+          });
+        }
+        lastOriginalSource = original.source;
+        lastOriginalLine = original.line;
+        lastOriginalColumn = original.column;
+        lastOriginalName = original.name;
+        sourceMappingActive = true;
+      } else if (sourceMappingActive) {
+        map.addMapping({
+          generated: {
+            line: generated.line,
+            column: generated.column
+          }
+        });
+        lastOriginalSource = null;
+        sourceMappingActive = false;
+      }
+      for (let idx = 0, length = chunk.length; idx < length; idx++) {
+        if (chunk.charCodeAt(idx) === NEWLINE_CODE) {
+          generated.line++;
+          generated.column = 0;
+          // Mappings end at eol
+          if (idx + 1 === length) {
+            lastOriginalSource = null;
+            sourceMappingActive = false;
+          } else if (sourceMappingActive) {
+            map.addMapping({
+              source: original.source,
+              original: {
+                line: original.line,
+                column: original.column
+              },
+              generated: {
+                line: generated.line,
+                column: generated.column
+              },
+              name: original.name
+            });
+          }
+        } else {
+          generated.column++;
+        }
+      }
+    });
+    this.walkSourceContents(function(sourceFile, sourceContent) {
+      map.setSourceContent(sourceFile, sourceContent);
+    });
+
+    return { code: generated.code, map };
+  }
+}
+
+var SourceNode_1 = SourceNode$1;
+
+var sourceNode = {
+	SourceNode: SourceNode_1
+};
+
+/*
+ * Copyright 2009-2011 Mozilla Foundation and contributors
+ * Licensed under the New BSD license. See LICENSE.txt or:
+ * http://opensource.org/licenses/BSD-3-Clause
+ */
+var SourceMapGenerator = sourceMapGenerator.SourceMapGenerator;
+var SourceMapConsumer = sourceMapConsumer.SourceMapConsumer;
+var SourceNode = sourceNode.SourceNode;
+
+var sourceMap = {
+	SourceMapGenerator: SourceMapGenerator,
+	SourceMapConsumer: SourceMapConsumer,
+	SourceNode: SourceNode
+};
+
+// @ts-check
+/** @typedef { import('estree').BaseNode} BaseNode */
+
+/** @typedef {{
+	skip: () => void;
+	remove: () => void;
+	replace: (node: BaseNode) => void;
+}} WalkerContext */
+
+class WalkerBase {
+	constructor() {
+		/** @type {boolean} */
+		this.should_skip = false;
+
+		/** @type {boolean} */
+		this.should_remove = false;
+
+		/** @type {BaseNode | null} */
+		this.replacement = null;
+
+		/** @type {WalkerContext} */
+		this.context = {
+			skip: () => (this.should_skip = true),
+			remove: () => (this.should_remove = true),
+			replace: (node) => (this.replacement = node)
+		};
+	}
+
+	/**
+	 *
+	 * @param {any} parent
+	 * @param {string} prop
+	 * @param {number} index
+	 * @param {BaseNode} node
+	 */
+	replace(parent, prop, index, node) {
+		if (parent) {
+			if (index !== null) {
+				parent[prop][index] = node;
+			} else {
+				parent[prop] = node;
+			}
+		}
+	}
+
+	/**
+	 *
+	 * @param {any} parent
+	 * @param {string} prop
+	 * @param {number} index
+	 */
+	remove(parent, prop, index) {
+		if (parent) {
+			if (index !== null) {
+				parent[prop].splice(index, 1);
+			} else {
+				delete parent[prop];
+			}
+		}
+	}
+}
+
+// @ts-check
+
+/** @typedef { import('estree').BaseNode} BaseNode */
+/** @typedef { import('./walker.js').WalkerContext} WalkerContext */
+
+/** @typedef {(
+ *    this: WalkerContext,
+ *    node: BaseNode,
+ *    parent: BaseNode,
+ *    key: string,
+ *    index: number
+ * ) => void} SyncHandler */
+
+class SyncWalker extends WalkerBase {
+	/**
+	 *
+	 * @param {SyncHandler} enter
+	 * @param {SyncHandler} leave
+	 */
+	constructor(enter, leave) {
+		super();
+
+		/** @type {SyncHandler} */
+		this.enter = enter;
+
+		/** @type {SyncHandler} */
+		this.leave = leave;
+	}
+
+	/**
+	 *
+	 * @param {BaseNode} node
+	 * @param {BaseNode} parent
+	 * @param {string} [prop]
+	 * @param {number} [index]
+	 * @returns {BaseNode}
+	 */
+	visit(node, parent, prop, index) {
+		if (node) {
+			if (this.enter) {
+				const _should_skip = this.should_skip;
+				const _should_remove = this.should_remove;
+				const _replacement = this.replacement;
+				this.should_skip = false;
+				this.should_remove = false;
+				this.replacement = null;
+
+				this.enter.call(this.context, node, parent, prop, index);
+
+				if (this.replacement) {
+					node = this.replacement;
+					this.replace(parent, prop, index, node);
+				}
+
+				if (this.should_remove) {
+					this.remove(parent, prop, index);
+				}
+
+				const skipped = this.should_skip;
+				const removed = this.should_remove;
+
+				this.should_skip = _should_skip;
+				this.should_remove = _should_remove;
+				this.replacement = _replacement;
+
+				if (skipped) return node;
+				if (removed) return null;
+			}
+
+			for (const key in node) {
+				const value = node[key];
+
+				if (typeof value !== "object") {
+					continue;
+				} else if (Array.isArray(value)) {
+					for (let i = 0; i < value.length; i += 1) {
+						if (value[i] !== null && typeof value[i].type === 'string') {
+							if (!this.visit(value[i], node, key, i)) {
+								// removed
+								i--;
+							}
+						}
+					}
+				} else if (value !== null && typeof value.type === "string") {
+					this.visit(value, node, key, null);
+				}
+			}
+
+			if (this.leave) {
+				const _replacement = this.replacement;
+				const _should_remove = this.should_remove;
+				this.replacement = null;
+				this.should_remove = false;
+
+				this.leave.call(this.context, node, parent, prop, index);
+
+				if (this.replacement) {
+					node = this.replacement;
+					this.replace(parent, prop, index, node);
+				}
+
+				if (this.should_remove) {
+					this.remove(parent, prop, index);
+				}
+
+				const removed = this.should_remove;
+
+				this.replacement = _replacement;
+				this.should_remove = _should_remove;
+
+				if (removed) return null;
+			}
+		}
+
+		return node;
+	}
+}
+
+// @ts-check
+
+/** @typedef { import('estree').BaseNode} BaseNode */
+/** @typedef { import('./sync.js').SyncHandler} SyncHandler */
+/** @typedef { import('./async.js').AsyncHandler} AsyncHandler */
+
+/**
+ *
+ * @param {BaseNode} ast
+ * @param {{
+ *   enter?: SyncHandler
+ *   leave?: SyncHandler
+ * }} walker
+ * @returns {BaseNode}
+ */
+function walk(ast, { enter, leave }) {
+	const instance = new SyncWalker(enter, leave);
+	return instance.visit(ast, null);
+}
+
+function print(ast) {
+	var astLocations = parse(generate(ast), {sourceType: 'module', locations: true});
+	var map = new sourceMap.SourceMapGenerator({file: "test.js"});
+	return { code: generate(astLocations, {sourceMap: map}), map: map.toString() };
+}
+
 function compiler (options = {}) {
 	return {
 	  name: 'cosmos',
   
-	  transform(content, id) {
-		  console.log(id);
-		  {
-			  return { code: content, map: this.getCombinedSourcemap() };
-		  }
-	  }
+		async transform(content, id) {
+			let path_ = path__default['default'].resolve(id);
+			if (path_.includes(process.cwd()) && path_.includes('.js') && !path_.includes('commonjsHelpers.js')) {
+				var ast = parse(content, {sourceType: 'module'});
+
+				walk(ast, {
+					enter(node, parent, prop, index) {
+					 	if (node.type == "VariableDeclarator" && node.init.type !== "CallExpression") {
+							 console.log(path_);
+							let old_value = node.init;
+							node.init = {
+								type: "CallExpression",
+								callee: {
+									type: "Identifier",
+									name: "variable"
+								},
+								arguments: [old_value]
+							};
+							this.replace(node);
+						} else if (node.type == "LogicalExpression" && node.operator == "&&" && node.right?.callee?.property?.name == "createElement" && parent.type !== "ReturnStatement") {
+							let old_node = node;
+
+							var vars = [];
+
+							//console.log(old_node);
+							walk(old_node.left, {
+								enter (node, parent, prop, index) {
+									if (node.type == "Identifier" && node.name !== "_vars") {
+										if (!vars.includes(node.name)) vars.push(node.name);
+										this.replace({
+											type: "MemberExpression",
+											object: {
+												type: "Identifier",
+												name: "_vars"
+											},
+											property: {
+												type: "Literal",
+												value: vars.findIndex((e) => { return e == node.name })
+											},
+											computed: true
+										});
+									}
+								}
+							});
+
+							let new_node = {
+								"type": "CallExpression",
+								"callee": {
+									"type": "MemberExpression",
+									"object": {
+									  "type": "ThisExpression",
+									},
+									"property": {
+										"type": "Identifier",
+										"name": "condition"
+									},
+								},
+								"arguments": [
+									{
+									  	"type": "ArrayExpression",
+									  	"elements": vars.map((variable) => {
+											return {
+												"type": "Identifier",
+												"name": variable
+											}
+										})
+									},
+									{
+										"type": "ArrowFunctionExpression",
+										"id": null,
+										"params": [
+											{type: "Identifier", name: "_vars"}
+										],
+										"body": {
+										  "type": "BlockStatement",
+										  "body": [
+											{
+											  "type": "ReturnStatement",
+											  "argument": old_node
+											}
+										  ]
+										}
+									}
+								]
+							};
+							
+							this.replace(new_node);
+						}
+					},
+					leave(node, parent, prop, index) {
+					  // some code happens
+					}
+				});
+
+				//Output with map
+				let output = print(ast);
+				return { code: output.code, map: output.map };
+			} else {
+				return { code: content, map: this.getCombinedSourcemap() };
+			}
+		}
 	};
 }
 

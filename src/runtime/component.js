@@ -95,7 +95,7 @@ export class Component {
 		return new Conditional(vars, cb);
 	}
 
-	for (array, cb) {
+	foreach (array, cb) {
 		return new For(array, cb);
 	}
 }

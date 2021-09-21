@@ -7,7 +7,8 @@ function stackTrace() {
 }
 
 export function variable (val) {
-	//{id: makeid(5), value: current_val, set, subscribe, get, get_last}
+	if (val.subscribe !== undefined) return val;
+
 	let subscribers = new Set();
 
 	let current_value = val;

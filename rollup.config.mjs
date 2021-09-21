@@ -8,10 +8,10 @@ export default [
 	{
 		input: 'src/runtime/index.js',
 		output: [
-			{ file: 'dist/runtime/index.js', format: 'umd', name: "cosmos", exports: 'auto' },
+			{ file: 'dist/runtime/index.js', format: 'umd', name: "cosmos" },
 		],
 		plugins: [
-			resolve({ browser: true }), 
+			resolve(), 
 			commonjs(),
 			//typescript()
 		]
