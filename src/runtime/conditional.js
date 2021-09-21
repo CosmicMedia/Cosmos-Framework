@@ -1,7 +1,7 @@
 import isEqual from 'lodash.isequal';
-import { get_current_component, set_current_component } from "./index";
+import { get_current_component, set_current_component } from "./component";
 
-export class Conditional {
+export default class Conditional {
 
 	//$ = API method/variable
 	//_ = Internal method/variable

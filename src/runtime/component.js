@@ -1,6 +1,9 @@
-import { Conditional, Element, For } from './index';
+import Conditional from './conditional';
+import Element from './element';
+import For from './for';
 
-export class Component {
+export default class Component {
+	cosmosFramework;
 	//$ = API method/variable
 	//_ = Internal method/variable
 

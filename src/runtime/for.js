@@ -1,8 +1,8 @@
 import isEqual from 'lodash.isequal';
-import { get_current_component, set_current_component } from "./index";
+import { get_current_component, set_current_component } from "./component";
 
 //TODO work on reactivity
-export class For {
+export default class For {
 
 	//$ = API method/variable
 	//_ = Internal method/variable

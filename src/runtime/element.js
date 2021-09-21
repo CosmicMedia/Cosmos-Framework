@@ -1,5 +1,5 @@
-import { get_current_component } from "./index";
-export class Element {
+import { get_current_component } from "./component";
+export default class Element {
 
 	//$ = API method/variable
 	//_ = Internal method/variable

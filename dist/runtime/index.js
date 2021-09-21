@@ -4,232 +4,6 @@
 	(global = typeof globalThis !== 'undefined' ? globalThis : global || self, factory(global.cosmos = {}));
 }(this, (function (exports) { 'use strict';
 
-	class Component {
-		//$ = API method/variable
-		//_ = Internal method/variable
-
-		//Element management
-		_parentElement; //Parent element to this
-		_childrenElements = new Set(); //Child elements
-
-		//Component management
-		$parent; //Parent component
-		$children = new Set(); //Child components
-		$props;
-
-		constructor (options = {}) {
-			//Todo this.mount if is root element
-			if (options.mount !== undefined && !(typeof window === 'undefined')) {
-				options.mount.innerHTML = "";
-				this.mount(options.mount);
-			}
-			if (options.props) this.$props = options.props;
-		}
-
-		set_parent(parent) {
-			this._parentElement = parent;
-		}
-
-		add_child(child) {
-			child.set_parent(this);
-			this._childrenElements.add(child);
-		}
-
-		remove_child(child) {
-			this._childrenElements.delete(child);
-		}
-	 
-		async mount (root, before = false) {
-			this._parentElement = root;
-			this.$parent = get_current_component();
-
-			if (get_current_component()) get_current_component().$children.add(this);
-			set_current_component(this);
-			await this.instance();
-			//Adds component
-			this.add_child(await this.render());
-			if (this.beforeMounted) await this.beforeMounted();
-
-			for (let child of this._childrenElements) {
-				set_current_component(this);
-				if (before) await child.mount(root, before);
-				else await child.mount(root);
-			}
-			if (this.mounted) await this.mounted();
-		}
-
-		async destroy () {
-			if (this.beforeUnmount) await this.beforeUnmount();
-			if (this._parentElement && this._parentElement.remove_child) this._parentElement.remove_child(this);
-
-			for (let child of this._childrenElements) await child.destroy();
-			if (this.unmounted) await this.unmounted();
-		}
-
-		createElement (type, attrs = {}, ...children) {
-			children = children.filter((child) => child !== false);
-			if (attrs == null) attrs = {};
-
-			if (typeof type == "string") {
-				//Creates element
-				let element = new Element(type, [], attrs);
-
-				//Adds children to element
-				for (const [key, value] of Object.entries(children)) { 
-					if (typeof value == "object" && value.subscribe == undefined) {
-						element.add_child(value);
-					} else {
-						element.add_child(new Element("#text", [value], attrs));
-					}
-				}
-				
-
-				return element;
-			} else {
-
-				//Initializes component
-				return new type({
-					props: attrs
-				});
-			}
-		}
-
-		//Todo reimplement with new code formatting
-		condition(vars, cb) {
-			return new Conditional(vars, cb);
-		}
-
-		foreach (array, cb) {
-			return new For(array, cb);
-		}
-	}
-
-	let current_component;
-
-	function set_current_component (component) {
-		current_component = component;
-	}
-
-	function get_current_component () {
-		return current_component;
-	}
-
-	function beforeMount (fn) {
-		get_current_component().beforeMounted = fn;
-	}
-
-	function onMount (fn) {
-		get_current_component().mounted = fn;
-	}
-
-	function beforeUnmount (fn) {
-		get_current_component().beforeUnmount = fn;
-	}
-
-	function onDestroy (fn) {
-		get_current_component().unmounted = fn;
-	}
-
-	function onRender (fn) {
-		get_current_component().render = fn;
-	}
-
-	class Element {
-
-		//$ = API method/variable
-		//_ = Internal method/variable
-
-		//Element management
-		_parentElement; //Parent element to this
-		_childrenElements = new Set(); //Child elements
-
-		//Component management
-		$parent; //Parent component
-		$children = new Set(); //Child components
-
-		_element;
-		_attrs;
-		_updateListeners = new Set();
-
-		_eventListeners = [];
-
-		constructor(element, children, attrs = {}) {
-			//create element
-			if (element == "#text") {
-				if (children[0].subscribe !== undefined) {
-					this._element = document.createTextNode(children[0].get());
-
-					this._updateListeners.add(children[0].subscribe((new_val, old_val) => {
-						this._element.textContent = new_val;
-					}));
-				} else {
-					this._element = document.createTextNode(children[0]);
-				}
-			} else {
-				this._element = document.createElement(element);
-
-				for (const [key, child] of Object.entries(children)) {
-					this.add_child(child);
-				}
-
-				this.set_attributes(attrs);
-			}
-		}
-
-		set_attributes (attrs) {
-			for (let [key, value] of Object.entries(attrs)) {
-				if (key.startsWith("on") && typeof value == "function") {
-					this._element.addEventListener(key.replace('on', '').toLowerCase(), value);
-					this._eventListeners.push({fn: value, e: key.replace('on', '').toLowerCase()});
-				} else {
-					if (value.subscribe !== undefined) {
-						this._element.setAttribute(key, value.get());
-						this._updateListeners.add(value.subscribe(((new_val, old_val) => {
-							this._element.setAttribute(key, new_val);
-						})).bind(this));
-					} else {
-						this._element.setAttribute(key, value);
-					}
-				}
-			}
-		}
-
-		set_parent(parent) {
-			this._parentElement = parent;
-		}
-
-		add_child(child) {
-			child.set_parent(this);
-			this._childrenElements.add(child);
-		}
-
-		remove_child(child) {
-			this._childrenElements.delete(child);
-		}
-
-		async mount (root, before = false) {
-			//console.log(root);
-			if (before) root.parentNode.insertBefore(this._element, root);
-			else root.appendChild(this._element);
-
-			//Appends mount's children
-			for (let child of this._childrenElements) {
-				await child.mount(this._element);
-			}
-		}
-
-		async destroy () {
-			for (let r of this._updateListeners) r();
-			for (let r of this._eventListeners) this._element.removeEventListener(r.e, r.fn);
-			this._element.remove();
-			if (this._parentElement) this._parentElement.remove_child(this);
-
-			for (let child of this._childrenElements) {
-				await child.destroy();
-			}
-		}
-	}
-
 	var commonjsGlobal = typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : typeof global !== 'undefined' ? global : typeof self !== 'undefined' ? self : {};
 
 	function createCommonjsModule(fn, module) {
@@ -2087,67 +1861,6 @@
 	module.exports = isEqual;
 	});
 
-	//TODO work on reactivity
-	class For {
-
-		//$ = API method/variable
-		//_ = Internal method/variable
-		$parent;
-
-		//Element management
-		_parentElement; //Parent element to this
-
-		//Conditional exclusive ;)
-		_anchor; //Anchor point for loop
-		_array; //Array value
-		_cb;
-
-		_children = [];
-
-		constructor (array, cb) {
-			//Create anchor point
-			this._anchor = document.createTextNode('');
-			this._cb = cb;
-			this._array = array;
-		}
-
-		set_parent(parent) {
-			this._parentElement = parent;
-		}
-
-		remove_child () {}
-
-		async update () {
-			
-		}
-
-		async mount (root, before = false) {
-			//Mount anchor point
-			root.appendChild(this._anchor);
-			this.$parent = get_current_component();
-
-			//Initialize reactive vars.
-			//console.log(this._array);
-			//TODO do this but not stupid
-			for (let i in this._array.value) {
-				let output = await this._cb(this._array.value[i]);
-				if (output !== undefined || output !== null) this._children.push(output);
-			}
-
-			for (let i in this._children) {
-				set_current_component(this.$parent);
-				await this._children[i].mount(this._anchor, true);
-			}
-		}
-
-		async destroy () {
-			this._anchor.remove();
-			for (let element of this._children) element.destroy();
-			if (this._parentElement) this._parentElement.remove_child(this);
-		}
-
-	}
-
 	class Conditional {
 
 		//$ = API method/variable
@@ -2232,6 +1945,294 @@
 
 	}
 
+	class Element {
+
+		//$ = API method/variable
+		//_ = Internal method/variable
+
+		//Element management
+		_parentElement; //Parent element to this
+		_childrenElements = new Set(); //Child elements
+
+		//Component management
+		$parent; //Parent component
+		$children = new Set(); //Child components
+
+		_element;
+		_attrs;
+		_updateListeners = new Set();
+
+		_eventListeners = [];
+
+		constructor(element, children, attrs = {}) {
+			//create element
+			if (element == "#text") {
+				if (children[0].subscribe !== undefined) {
+					this._element = document.createTextNode(children[0].get());
+
+					this._updateListeners.add(children[0].subscribe((new_val, old_val) => {
+						this._element.textContent = new_val;
+					}));
+				} else {
+					this._element = document.createTextNode(children[0]);
+				}
+			} else {
+				this._element = document.createElement(element);
+
+				for (const [key, child] of Object.entries(children)) {
+					this.add_child(child);
+				}
+
+				this.set_attributes(attrs);
+			}
+		}
+
+		set_attributes (attrs) {
+			for (let [key, value] of Object.entries(attrs)) {
+				if (key.startsWith("on") && typeof value == "function") {
+					this._element.addEventListener(key.replace('on', '').toLowerCase(), value);
+					this._eventListeners.push({fn: value, e: key.replace('on', '').toLowerCase()});
+				} else {
+					if (value.subscribe !== undefined) {
+						this._element.setAttribute(key, value.get());
+						this._updateListeners.add(value.subscribe(((new_val, old_val) => {
+							this._element.setAttribute(key, new_val);
+						})).bind(this));
+					} else {
+						this._element.setAttribute(key, value);
+					}
+				}
+			}
+		}
+
+		set_parent(parent) {
+			this._parentElement = parent;
+		}
+
+		add_child(child) {
+			child.set_parent(this);
+			this._childrenElements.add(child);
+		}
+
+		remove_child(child) {
+			this._childrenElements.delete(child);
+		}
+
+		async mount (root, before = false) {
+			//console.log(root);
+			if (before) root.parentNode.insertBefore(this._element, root);
+			else root.appendChild(this._element);
+
+			//Appends mount's children
+			for (let child of this._childrenElements) {
+				await child.mount(this._element);
+			}
+		}
+
+		async destroy () {
+			for (let r of this._updateListeners) r();
+			for (let r of this._eventListeners) this._element.removeEventListener(r.e, r.fn);
+			this._element.remove();
+			if (this._parentElement) this._parentElement.remove_child(this);
+
+			for (let child of this._childrenElements) {
+				await child.destroy();
+			}
+		}
+	}
+
+	//TODO work on reactivity
+	class For {
+
+		//$ = API method/variable
+		//_ = Internal method/variable
+		$parent;
+
+		//Element management
+		_parentElement; //Parent element to this
+
+		//Conditional exclusive ;)
+		_anchor; //Anchor point for loop
+		_array; //Array value
+		_cb;
+
+		_children = [];
+
+		constructor (array, cb) {
+			//Create anchor point
+			this._anchor = document.createTextNode('');
+			this._cb = cb;
+			this._array = array;
+		}
+
+		set_parent(parent) {
+			this._parentElement = parent;
+		}
+
+		remove_child () {}
+
+		async update () {
+			
+		}
+
+		async mount (root, before = false) {
+			//Mount anchor point
+			root.appendChild(this._anchor);
+			this.$parent = get_current_component();
+
+			//Initialize reactive vars.
+			//console.log(this._array);
+			//TODO do this but not stupid
+			for (let i in this._array.value) {
+				let output = await this._cb(this._array.value[i]);
+				if (output !== undefined || output !== null) this._children.push(output);
+			}
+
+			for (let i in this._children) {
+				set_current_component(this.$parent);
+				await this._children[i].mount(this._anchor, true);
+			}
+		}
+
+		async destroy () {
+			this._anchor.remove();
+			for (let element of this._children) element.destroy();
+			if (this._parentElement) this._parentElement.remove_child(this);
+		}
+
+	}
+
+	class Component {
+		cosmosFramework;
+		//$ = API method/variable
+		//_ = Internal method/variable
+
+		//Element management
+		_parentElement; //Parent element to this
+		_childrenElements = new Set(); //Child elements
+
+		//Component management
+		$parent; //Parent component
+		$children = new Set(); //Child components
+		$props;
+
+		constructor (options = {}) {
+			//Todo this.mount if is root element
+			if (options.mount !== undefined && !(typeof window === 'undefined')) {
+				options.mount.innerHTML = "";
+				this.mount(options.mount);
+			}
+			if (options.props) this.$props = options.props;
+		}
+
+		set_parent(parent) {
+			this._parentElement = parent;
+		}
+
+		add_child(child) {
+			child.set_parent(this);
+			this._childrenElements.add(child);
+		}
+
+		remove_child(child) {
+			this._childrenElements.delete(child);
+		}
+	 
+		async mount (root, before = false) {
+			this._parentElement = root;
+			this.$parent = get_current_component();
+
+			if (get_current_component()) get_current_component().$children.add(this);
+			set_current_component(this);
+			await this.instance();
+			//Adds component
+			this.add_child(await this.render());
+			if (this.beforeMounted) await this.beforeMounted();
+
+			for (let child of this._childrenElements) {
+				set_current_component(this);
+				if (before) await child.mount(root, before);
+				else await child.mount(root);
+			}
+			if (this.mounted) await this.mounted();
+		}
+
+		async destroy () {
+			if (this.beforeUnmount) await this.beforeUnmount();
+			if (this._parentElement && this._parentElement.remove_child) this._parentElement.remove_child(this);
+
+			for (let child of this._childrenElements) await child.destroy();
+			if (this.unmounted) await this.unmounted();
+		}
+
+		createElement (type, attrs = {}, ...children) {
+			children = children.filter((child) => child !== false);
+			if (attrs == null) attrs = {};
+
+			if (typeof type == "string") {
+				//Creates element
+				let element = new Element(type, [], attrs);
+
+				//Adds children to element
+				for (const [key, value] of Object.entries(children)) { 
+					if (typeof value == "object" && value.subscribe == undefined) {
+						element.add_child(value);
+					} else {
+						element.add_child(new Element("#text", [value], attrs));
+					}
+				}
+				
+
+				return element;
+			} else {
+
+				//Initializes component
+				return new type({
+					props: attrs
+				});
+			}
+		}
+
+		//Todo reimplement with new code formatting
+		condition(vars, cb) {
+			return new Conditional(vars, cb);
+		}
+
+		foreach (array, cb) {
+			return new For(array, cb);
+		}
+	}
+
+	let current_component;
+
+	function set_current_component (component) {
+		current_component = component;
+	}
+
+	function get_current_component () {
+		return current_component;
+	}
+
+	function beforeMount (fn) {
+		get_current_component().beforeMounted = fn;
+	}
+
+	function onMount (fn) {
+		get_current_component().mounted = fn;
+	}
+
+	function beforeUnmount (fn) {
+		get_current_component().beforeUnmount = fn;
+	}
+
+	function onDestroy (fn) {
+		get_current_component().unmounted = fn;
+	}
+
+	function onRender (fn) {
+		get_current_component().render = fn;
+	}
+
 	function makeid(length) {
 		var result           = '';
 		var characters       = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -2295,18 +2296,13 @@
 	}
 
 	exports.Component = Component;
-	exports.Conditional = Conditional;
-	exports.Element = Element;
-	exports.For = For;
 	exports.anchor = anchor;
 	exports.beforeMount = beforeMount;
 	exports.beforeUnmount = beforeUnmount;
-	exports.get_current_component = get_current_component;
 	exports.makeid = makeid;
 	exports.onDestroy = onDestroy;
 	exports.onMount = onMount;
 	exports.onRender = onRender;
-	exports.set_current_component = set_current_component;
 	exports.variable = variable;
 
 	Object.defineProperty(exports, '__esModule', { value: true });
