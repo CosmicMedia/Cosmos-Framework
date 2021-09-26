@@ -8,6 +8,10 @@ export function resolvePath(id, src) {
 	}
 }
 
+export function isLocalPath(id) {
+	return id.startsWith('./') ||  id.startsWith('../');
+}
+
 export function splicePathWindows(path, src){
 	path.splice(path.length-1, 1);
 	return (path.join('\\') + "\\" + src)
@@ -15,5 +19,5 @@ export function splicePathWindows(path, src){
 
 export function splicePath(path, src){
 	path.splice(path.length-1, 1);
-	return (path,join('/') + "/" + src);
+	return (path.join('/') + "/" + src);
 }

@@ -49,125 +49,77 @@ compiler.getCombinedSourcemap  = () => {};
 
 */
 
-compiler.transform(`import { Component, onMount, onRender, onDestroy, variable } from 'cosmos';
-import Test from './test.js'
+/*
 
-export default class App extends Component {
-	//Register variable to instance
+object.test.test.test = "";
 
-	async instance () {
-		let test = variable(1);
+//Using value
+{object.test.test.test}
+{usable(object).objectreference(['test', 'test', 'test'])} //Listens for subscribe when specific path is updated.
 
-		let color = 'color: blue;';
-		let test2 = <p>Test2</p>
-		let array = ["arraytest", "test2"];
+//Setting value
+object.test.test.test = "value";
+usable(object).objectreference(['test', 'test', 'test']).set('value');
 
-		let interval = setInterval(() => {
-			test.value = test.get()+1;
-			test.update();
-		}, 500)
 
-		
-		/*
-		setTimeout(() => {
-			color.set('color: green;')
-		}, 5000)
-		*/
-		test.subscribe((new_val, old_val) => {
-			if (new_val > 10 && color.get() !== color.get_last()) {
-				color.set('color: green');
+
+*/
+(async () => {
+	let output = await compiler.transform(`"use strict";
+	Object.defineProperty(exports, "__esModule", { value: true });
+	exports.io = exports.Socket = exports.Manager = exports.protocol = void 0;
+	const url_1 = require("./url");
+	const manager_1 = require("./manager");
+	const debug = require("debug")("socket.io-client");
+
+	module.exports = exports = lookup;
+
+	const cache = (exports.managers = {});
+	function lookup(uri, opts) {
+		if (typeof uri === "object") {
+			opts = uri;
+			uri = undefined;
+		}
+		opts = opts || {};
+		const parsed = (0, url_1.url)(uri, opts.path || "/socket.io");
+		const source = parsed.source;
+		const id = parsed.id;
+		const path = parsed.path;
+		const sameNamespace = cache[id] && path in cache[id]["nsps"];
+		const newConnection = opts.forceNew ||
+			opts["force new connection"] ||
+			false === opts.multiplex ||
+			sameNamespace;
+		let io;
+		if (newConnection) {
+			debug("ignoring socket cache for %s", source);
+			io = new manager_1.Manager(source, opts);
+		}
+		else {
+			if (!cache[id]) {
+				debug("new io instance for %s", source);
+				cache[id] = new manager_1.Manager(source, opts);
 			}
-		})
-
-		onDestroy(() => {
-			clearInterval(interval);
-		});
-
-
-		onMount(() => {
-			console.log('Mounted');
-		})
-
-		onRender(() => {
-			let styles = \`
-				* {
-					box-sizing: border-box;
-					letter-spacing: -0.05em !important;
-				}
-				
-				#app {
-					min-height: 100vh;
-					margin:0;
-					width:100%;
-				}
-
-				body {
-					margin: 0;
-				}
-
-				blockquote, dd, dl, figure, h1, h2, h3, h4, h5, h6, hr, p, pre {
-					margin: 0;
-				}
-				
-				body {
-					font-family: 'Inter', sans-serif;
-					padding: 0;
-					overflow: hidden;
-					position: fixed;
-					margin: 0;
-					min-height: 100vh;
-				}
-
-				html, body {
-					width:100%;
-				}
-
-				.test {
-					color: green;
-				}
-			\`;
-
-			function testFn () {
-				alert('Test')
-			}
-
-			return (
-				<div id="app" style="text-align:center;">
-					<style>{styles}</style>
-					<div style="width:100%;text-align:center;height:50px;text-align:center;box-shadow: 0px 0px 18px 3px rgba(0,0,0,0.55);margin-bottom:20px;">
-						<p style="height:100%;">Header</p>
-					</div>
-					<h1 onClick={testFn}>Click me!</h1>
-
-					<h2 class="test" style={color}>Test {test}... <span>{test}</span></h2>
-
-					{test} <br/>
-
-					{test >= 10 &&
-						<h2>
-							bruhxdddd
-						</h2>
-					}
-
-					{(test >= 10 && test <= 100) && 
-						<h1>Reactivity Test {test} 
-							{(test >= 30 && test <= 50) || (test >= 70 && test <= 100) && <h1>Conditional 2</h1>}
-							{this.foreach(array, (item) => { return <h1>{item}</h1>; })}
-							<br/>
-						</h1>
-					}
-
-
-					<Test test={test} />
-					{test} <br/>
-					{test} <br/>
-					{test} <br/>
-					{test} <br/>
-					{test} <br/>
-				</div>
-			)
-		})
+			io = cache[id];
+		}
+		if (parsed.query && !opts.query) {
+			opts.query = parsed.queryKey;
+		}
+		return io.socket(parsed.path, opts);
 	}
-}
+	exports.io = lookup;
 
-`,  path.resolve('C:\\Users\\blake\\Desktop\\Development\\Cosmos-Framework\\test\\test.js'))
+	var socket_io_parser_1 = require("socket.io-parser");
+	Object.defineProperty(exports, "protocol", { enumerable: true, get: function () { return socket_io_parser_1.protocol; } });
+
+	exports.connect = lookup;
+
+	var manager_2 = require("./manager");
+	Object.defineProperty(exports, "Manager", { enumerable: true, get: function () { return manager_2.Manager; } });
+	var socket_1 = require("./socket");
+	Object.defineProperty(exports, "Socket", { enumerable: true, get: function () { return socket_1.Socket; } });
+	exports.default = lookup;
+	`,  path.resolve('C:\\Users\\blake\\Desktop\\Development\\Cosmos-Framework\\test\\test.js'));
+	console.log(output.code)
+})()
+// console.log(compiler.transform(`object.test.test.test`,  path.resolve('C:\\Users\\blake\\Desktop\\Development\\Cosmos-Framework\\test\\test.js')).code)

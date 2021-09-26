@@ -3,6 +3,8 @@ import commonjs from 'rollup-plugin-commonjs';
 import typescript from 'rollup-plugin-typescript2';
 import json from '@rollup/plugin-json';
 //import pkg from './package.json';
+import babel from '@rollup/plugin-babel';
+const babel_ = babel.babel;
 
 export default [
 	{
@@ -13,6 +15,25 @@ export default [
 		plugins: [
 			resolve(), 
 			commonjs(),
+			babel_({
+				exclude: 'node_modules/**',
+				"presets": [
+					['@babel/preset-env',
+					{
+						targets: {
+						  browsers: "> 0.5%, ie >= 11"
+						},
+						modules: false,
+						spec: true,
+						useBuiltIns: "usage",
+						forceAllTransforms: true,
+						corejs: {
+						  version: 3,
+						  proposals: false
+						}
+					  }]
+				],
+			}),
 			//typescript()
 		]
 	},

@@ -1,14 +1,21 @@
+/*!
+		* https://github.com/CosmicMedia/Cosmic-Framework
+		* @license es6-shim Copyright 2021 CosmicMedia LLC (https://cosmic.media)
+		*   and contributors,  MIT License
+		* see https://github.com/CosmicMedia/Cosmic-Framework/LICENSE
+		* Details and documentation:
+		* https://github.com/CosmicMedia/Cosmic-Framework/
+*/
 import Conditional from './conditional';
 import Element from './element';
 import For from './for';
 
 export default class Component {
-	cosmosFramework;
 	//$ = API method/variable
 	//_ = Internal method/variable
 
 	//Element management
-	_parentElement; //Parent element to this
+	_parentElement = undefined; //Parent element to this
 	_childrenElements = new Set(); //Child elements
 
 	//Component management
@@ -18,9 +25,13 @@ export default class Component {
 
 	constructor (options = {}) {
 		//Todo this.mount if is root element
+		if (options.mount == undefined && window.ssr && window.ssr == true) document.body.style.visibility = 'hidden';
 		if (options.mount !== undefined && !(typeof window === 'undefined')) {
 			options.mount.innerHTML = "";
-			this.mount(options.mount);
+			((async () => {
+				await this.mount(options.mount);
+				if (!window.ssr) document.body.style.visibility = 'visible';
+			}).bind(this))()
 		}
 		if (options.props) this.$props = options.props;
 	}
@@ -46,7 +57,14 @@ export default class Component {
 		set_current_component(this);
 		await this.instance();
 		//Adds component
-		this.add_child(await this.render());
+		let output = await this.render();
+		if (Array.isArray(output)) {
+			for (let i in output) {
+				this.add_child(output[i]);
+			}
+		} else {
+			this.add_child(output);
+		}
 		if (this.beforeMounted) await this.beforeMounted();
 
 		for (let child of this._childrenElements) {

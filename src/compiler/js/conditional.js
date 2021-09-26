@@ -5,7 +5,7 @@ export default function (ast) {
 	walk(ast, {
 		enter(node, parent, prop, index) {
 			//Variable declaration
-			if (node.type == "LogicalExpression" && node.operator == "&&" && node.right?.callee?.property?.name == "createElement" && parent.type !== "ReturnStatement") {
+			if (node.type == "LogicalExpression" && node.operator == "&&" && node.right.type == "JSXElement" && parent.type !== "ReturnStatement") {
 				let old_node = node;
 
 				var vars = [];
@@ -13,7 +13,7 @@ export default function (ast) {
 				//console.log(old_node);
 				walk(old_node.left, {
 					enter (node, parent, prop, index) {
-						if (node.type == "Identifier" && node.name !== "_vars") {
+						if (node.type == "Identifier" && node.name !== "_vars" && parent.type == "BinaryExpression") {
 							if (!vars.includes(node.name)) vars.push(node.name);
 							this.replace({
 								type: "MemberExpression",
@@ -33,6 +33,7 @@ export default function (ast) {
 
 				let new_node = {
 					"type": "CallExpression",
+					"internal": true,
 					"callee": {
 						"type": "MemberExpression",
 						"object": {
@@ -71,6 +72,8 @@ export default function (ast) {
 						}
 					]
 				}
+
+				console.log("\n\n\n\nTEST");
 				
 				this.replace(new_node);
 			} 

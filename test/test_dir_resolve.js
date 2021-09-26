@@ -1,20 +1,5 @@
-const path = require('path');
+const isLocalPath = require('../dist/compiler/index').isLocalPath;
 
-let id = "C:\\\\sdfhjdsfhdf\\dfsijdsfhufd\\dsfhgdfsghbfd\\component.js";
+let id = "./component.js";
 
-let src = "/test/bruh.js"
-
-
-if(id.split('/')[0] == id){
-    const fullPath = id.split('\\');
-    console.log(fullPath);
-    fullPath.splice(fullPath.length-1, 1);
-    console.log(fullPath);
-    console.log(path.resolve(fullPath.join('\\') + "\\" + src));
-} else {
-    const fullPath = id.split('/');
-    console.log(fullPath);
-    fullPath.splice(fullPath.length-1, 1);
-    console.log(fullPath);
-    console.log(path.resolve(fullPath.join('/') + "/" + src));
-}
+console.log(isLocalPath(id));

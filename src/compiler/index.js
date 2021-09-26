@@ -1,28 +1,17 @@
 import path from 'path';
 
 //JS Parsing Imports
-import { generate, GENERATOR as AstringGenerator } from "astring";
-import { Parser } from "acorn";
-import sourceMap from "source-map";
 import { walk } from 'estree-walker';
 
 import compile_cosmos from './compile_cosmos';
 import compile_js from './compile_js';
 
-import parse5 from 'parse5';
+import {parse, serialize} from './js';
 
-const parse_js = Parser.extend(
-	require("acorn-jsx")(),
-	require("acorn-bigint")
-)
+import { parse as parseHtml } from './template';
+import { parse5_to_jsx } from './template/template';
 
-const generator = Object.assign({}, AstringGenerator, require('astring-jsx').generator);
-
-function print(ast) {
-	var astLocations = parse_js(generate(ast, {generator: generator}), {sourceType: 'module', locations: true});
-	var map = new sourceMap.SourceMapGenerator({file: "test.js"});
-	return { code: generate(astLocations, {sourceMap: map, generator: generator}), map: map.toString() };
-}
+import fs from 'fs';
 
 export default function compiler (options = {}) {
 	
@@ -60,15 +49,46 @@ export default function compiler (options = {}) {
 	
 		async transform(content, id) {
 			let path_ = path.resolve(id);
-			console.log(process.cwd())
-			if (path_.includes(process.cwd()) && !path_.includes('commonjsHelpers.js')) {
+			//console.log(path_);
+			if (!path_.includes('commonjs') && !path_.includes('runtime') && !path_.includes('node_modules') && !path_.includes('rollupPluginBabelHelpers.js')) {
 
+				//if (id.includes('socket.io')) console.log(content);
 				var ast;
 				if (id.includes('.cosmos'))  ast = compile_cosmos(content, id); 
-				else if (id.includes('.js')) ast = compile_js(content);
+				else if (id.includes('.js')|| id.includes('.mjs')) ast = compile_js(content);
 
-				let output = print(ast);
+				/*
+				ast.body.unshift({
+					"type": "ImportDeclaration",
+					"specifiers": [
+						{
+							"type": "ImportSpecifier",
+							"imported": {
+							"type": "Identifier",
+							"name": "variable"
+						},
+							"local": {
+								"type": "Identifier",
+								"name": "variable"
+							}
+						}
+					],
+					"source": {
+					  "type": "Literal",
+					  "value": "cosmos",
+					  "raw": "'cosmos'"
+					}
+				})
+				*/
+				/*console.log(serialize(parse5_to_jsx(parseHtml(`
+				<h1>Test<p>Test</p></h1>
+				`))))*/
+
+				//if (id.includes('socket.io')) console.log(ast);
+
+				let output = serialize(ast);
 				return { code: output.code, map: output.map };
+				//return { code: content, map: this.getCombinedSourcemap() };
 
 			} else {
 				return { code: content, map: this.getCombinedSourcemap() };
